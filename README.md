@@ -138,30 +138,92 @@ for setup instructions.
 
 ## Quick start
 
+### Step 0 — Check your GFF format
+
+Before parsing, inspect your annotation file to find the right feature type
+and attribute key for your data:
+
 ```r
 library(iadhoreR)
 
-# Paths to your input files
-gff1  <- "species1.gff3"
-gff2  <- "species2.gff3"
-fasta1 <- "species1_proteins.fasta"
-fasta2 <- "species2_proteins.fasta"
-work  <- "my_analysis"
+# See all feature types and attribute keys in the file
+inspect_gff("species1.gff3")
 
-# 1. Parse GFF files into gene lists
-sp1_lists <- parse_gff(gff1, output_dir = file.path(work, "sp1_lists"),
-                       genome_name = "sp1", feature_type = "mRNA",
-                       id_attribute = "ID")
-sp2_lists <- parse_gff(gff2, output_dir = file.path(work, "sp2_lists"),
-                       genome_name = "sp2", feature_type = "mRNA",
+# Auto-match GFF IDs against your protein FASTA and get recommended parameters
+recommend_parse_gff("species1.gff3", "species1_proteins.fasta")
+#> Best match: feature_type = "mRNA", id_attribute = "ID"
+#>   Matched: 27655 / 27655
+```
+
+Use the `feature_type` and `id_attribute` values returned in the examples below.
+
+---
+
+### Example 1 — Single species (intra-genomic duplications)
+
+```r
+work <- "my_analysis"
+
+# 1. Parse GFF into gene lists (one file per chromosome)
+sp1_lists <- parse_gff("species1.gff3",
+                       output_dir   = file.path(work, "sp1_lists"),
+                       genome_name  = "sp1",
+                       feature_type = "mRNA",
                        id_attribute = "ID")
 
 # 2. All-vs-all protein similarity search
-run_diamond(c(fasta1, fasta2),
-            output_file = file.path(work, "all_vs_all.blast"),
+run_diamond("species1_proteins.fasta",
+            output_file = file.path(work, "sp1.blast"),
             threads = 8)
 
 # 3. Cluster into gene families
+blast_to_families(
+  blast_file      = file.path(work, "sp1.blast"),
+  output_file     = file.path(work, "families.txt"),
+  gene_list_files = unname(sp1_lists)
+)
+
+# 4. Write config and run i-ADHoRe
+write_iadhore_config(
+  genomes     = list(sp1 = sp1_lists),
+  blast_table = file.path(work, "families.txt"),
+  table_type  = "family",
+  output_path = file.path(work, "output"),
+  file        = file.path(work, "config.ini")
+)
+run_iadhore(file.path(work, "config.ini"))
+
+# 5. Read results
+results <- read_iadhore_output(file.path(work, "output"))
+head(results$multiplicons)   # syntenic regions
+head(results$anchorpoints)   # homologous gene pairs
+```
+
+---
+
+### Example 2 — Two species (inter-genomic synteny)
+
+```r
+work <- "my_analysis"
+
+# 1. Parse GFF for each species
+sp1_lists <- parse_gff("species1.gff3",
+                       output_dir   = file.path(work, "sp1_lists"),
+                       genome_name  = "sp1",
+                       feature_type = "mRNA",
+                       id_attribute = "ID")
+sp2_lists <- parse_gff("species2.gff3",
+                       output_dir   = file.path(work, "sp2_lists"),
+                       genome_name  = "sp2",
+                       feature_type = "mRNA",
+                       id_attribute = "ID")
+
+# 2. All-vs-all search across both species (pass both FASTAs)
+run_diamond(c("species1_proteins.fasta", "species2_proteins.fasta"),
+            output_file = file.path(work, "all_vs_all.blast"),
+            threads = 8)
+
+# 3. Cluster into gene families (include both species' gene lists)
 blast_to_families(
   blast_file      = file.path(work, "all_vs_all.blast"),
   output_file     = file.path(work, "families.txt"),
@@ -182,13 +244,6 @@ run_iadhore(file.path(work, "config.ini"))
 results <- read_iadhore_output(file.path(work, "output"))
 head(results$multiplicons)   # syntenic regions
 head(results$anchorpoints)   # homologous gene pairs
-```
-
-Not sure which GFF features and attributes to use? Start with:
-
-```r
-inspect_gff("species1.gff3")
-recommend_parse_gff("species1.gff3", "species1_proteins.fasta")
 ```
 
 ## Full tutorial
