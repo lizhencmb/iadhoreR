@@ -44,7 +44,7 @@ conda activate iadhoreR
 
 ```r
 # install.packages("remotes")
-remotes::install_github("YOUR_USERNAME/iadhoreR")
+remotes::install_github("lizhencmb/iadhoreR")
 ```
 
 After installation, verify your setup:
