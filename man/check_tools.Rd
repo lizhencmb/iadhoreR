@@ -14,17 +14,10 @@ Looks up i-ADHoRe, DIAMOND, and the MCL suite on the system PATH and prints
 a status table. If any tool is missing, prints setup instructions.
 }
 \details{
-All three tools must be on the PATH before using [run_iadhore()],
-[run_diamond()], or [blast_to_families()]. The easiest way to install them
-is via conda. A ready-made environment file is bundled with the package:
+All tools can be installed via conda:
 
 ```
-# Option A — create a dedicated environment (recommended)
-conda env create -f <path from setup_instructions()>
-conda activate iadhoreR
-
-# Option B — install into an existing environment
-conda install -c bioconda -c conda-forge i-adhore diamond mcl
+conda install -c lizhencmb -c bioconda -c conda-forge i-adhore diamond mcl
 ```
 
 Call [setup_instructions()] to print the exact commands for your system.

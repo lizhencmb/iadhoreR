@@ -58,12 +58,16 @@ Full step-by-step installation instructions are in the
 1. Install [R](https://cran.r-project.org) (≥ 4.0)
 2. Install [Miniconda](https://docs.conda.io/en/latest/miniconda.html) or
    [Mambaforge](https://github.com/conda-forge/miniforge#mambaforge)
-3. Install DIAMOND and MCL via conda (i-ADHoRe is bundled with the package):
+3. Create the conda environment with all tools:
 
 ```bash
 conda env create -f https://raw.githubusercontent.com/lizhencmb/iadhoreR/main/inst/conda/environment.yml
 conda activate iadhoreR
 ```
+
+   > **Windows users:** use WSL2 — see the
+   > [README](https://github.com/lizhencmb/iadhoreR#windows-users-wsl2)
+   > for setup instructions.
 
 4. With the environment active, install iadhoreR from R:
 

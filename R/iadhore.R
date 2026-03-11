@@ -3,17 +3,10 @@
 #' Looks up i-ADHoRe, DIAMOND, and the MCL suite on the system PATH and prints
 #' a status table. If any tool is missing, prints setup instructions.
 #'
-#' All three tools must be on the PATH before using [run_iadhore()],
-#' [run_diamond()], or [blast_to_families()]. The easiest way to install them
-#' is via conda. A ready-made environment file is bundled with the package:
+#' All tools can be installed via conda:
 #'
 #' ```
-#' # Option A — create a dedicated environment (recommended)
-#' conda env create -f <path from setup_instructions()>
-#' conda activate iadhoreR
-#'
-#' # Option B — install into an existing environment
-#' conda install -c bioconda -c conda-forge i-adhore diamond mcl
+#' conda install -c lizhencmb -c bioconda -c conda-forge i-adhore diamond mcl
 #' ```
 #'
 #' Call [setup_instructions()] to print the exact commands for your system.
@@ -29,25 +22,19 @@ check_tools <- function() {
   paths <- Sys.which(tools)
   found <- nchar(paths) > 0
 
-  # i-adhore is bundled — check via get_iadhore_bin() not Sys.which()
-  iadhore_ok <- tryCatch({ get_iadhore_bin(); TRUE }, error = function(e) FALSE)
-  iadhore_status <- if (iadhore_ok) "[OK]     bundled" else "[MISSING] bundled binary not found"
-
   cat("External tool status:\n")
-  cat(sprintf("  %-12s %s\n", "i-adhore", iadhore_status))
   for (i in seq_along(tools)) {
     status <- if (found[i]) paste0("[OK]     ", paths[i]) else "[MISSING]"
     cat(sprintf("  %-12s %s\n", tools[i], status))
   }
 
-  all_ok <- iadhore_ok && all(found)
-  if (!all_ok) {
+  if (!all(found)) {
     cat("\nOne or more tools are missing. Run setup_instructions() for help.\n")
   } else {
     cat("\nAll tools found. You are ready to use iadhoreR.\n")
   }
 
-  invisible(setNames(c(iadhore_ok, found), c("i-adhore", tools)))
+  invisible(setNames(found, tools))
 }
 
 
@@ -67,16 +54,15 @@ setup_instructions <- function() {
   env_yml <- system.file("conda", "environment.yml",
                          package = "iadhoreR", mustWork = TRUE)
 
-  cat("iadhoreR setup:\n\n")
-  cat("  i-ADHoRe  -- bundled with the package (no installation needed)\n\n")
-  cat("  DIAMOND and MCL -- install via conda (https://docs.conda.io):\n\n")
+  cat("iadhoreR requires i-ADHoRe, DIAMOND, and MCL on your PATH.\n")
+  cat("Install them via conda (https://docs.conda.io):\n\n")
 
   cat("  # Option A: create a dedicated environment (recommended)\n")
   cat("  conda env create -f", env_yml, "\n")
   cat("  conda activate iadhoreR\n\n")
 
   cat("  # Option B: install into your current environment\n")
-  cat("  conda install -c bioconda -c conda-forge diamond mcl\n\n")
+  cat("  conda install -c lizhencmb -c bioconda -c conda-forge i-adhore diamond mcl\n\n")
 
   cat("After activating the environment, launch R from that same shell\n")
   cat("so it inherits the correct PATH.\n\n")
@@ -96,34 +82,15 @@ setup_instructions <- function() {
 #' Get i-ADHoRe executable path
 #' @keywords internal
 get_iadhore_bin <- function() {
-  os <- tolower(Sys.info()["sysname"])
-
-  if (os == "darwin") {
-    arch     <- system("uname -m", intern = TRUE)
-    bin_file <- if (arch == "arm64") "i-adhore-arm64" else "i-adhore-x86_64"
-    bin_dir  <- "macos"
-  } else if (os == "linux") {
-    bin_file <- "i-adhore"
-    bin_dir  <- "linux"
-  } else if (os == "windows") {
-    bin_file <- "i-adhore.exe"
-    bin_dir  <- "windows"
-  } else {
-    stop("Unsupported operating system: ", os)
-  }
-
-  bin_path <- system.file("bin", bin_dir, bin_file,
-                          package = "iadhoreR", mustWork = FALSE)
-
-  if (bin_path == "" || !file.exists(bin_path)) {
+  path <- Sys.which("i-adhore")
+  if (path == "") {
     stop(
-      "i-ADHoRe binary not found for your platform (", os, ").\n",
-      "Please open an issue at https://github.com/lizhencmb/iadhoreR/issues"
+      "i-ADHoRe not found in PATH.\n",
+      "Install it via conda:\n",
+      "  conda install -c lizhencmb -c bioconda -c conda-forge i-adhore"
     )
   }
-
-  Sys.chmod(bin_path, "755")
-  bin_path
+  path
 }
 
 #' Run i-ADHoRe analysis

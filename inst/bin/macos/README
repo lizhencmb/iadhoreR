@@ -1,7 +1,0 @@
-Pre-compiled i-ADHoRe 3.0 binaries for macOS.
-
-i-ADHoRe-arm64: macOS Apple Silicon (M1/M2/M3)
-i-adhore-x86_64: macOS Intel
-
-Source: https://github.com/VIB-PSB/i-ADHoRe
-License: see https://github.com/VIB-PSB/i-ADHoRe/blob/master/LICENSE

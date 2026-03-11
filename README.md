@@ -37,11 +37,8 @@ solver, recommended for bioinformatics).
 
 ### Step 3 — Install the external tools
 
-iadhoreR relies on three tools:
-
-- **i-ADHoRe** — bundled with the package, no installation needed
-- **DIAMOND** and **MCL** — installed via [conda](https://docs.conda.io)
-  (both are on [Bioconda](https://bioconda.github.io))
+All three tools — **i-ADHoRe**, **DIAMOND**, and **MCL** — can be installed
+via conda:
 
 **Option A: dedicated environment (recommended)**
 
@@ -54,7 +51,7 @@ conda activate iadhoreR
 
 ```bash
 conda activate my_existing_env
-conda install -c bioconda -c conda-forge diamond mcl
+conda install -c lizhencmb -c bioconda -c conda-forge i-adhore diamond mcl
 ```
 
 > **Important:** always activate the conda environment *before* opening R or
@@ -92,6 +89,52 @@ check_tools()
 
 If any tool shows `[MISSING]`, run `setup_instructions()` in R for
 troubleshooting guidance.
+
+---
+
+## Windows users (WSL2)
+
+i-ADHoRe and MCL do not have native Windows builds. The recommended approach
+is **Windows Subsystem for Linux 2 (WSL2)**, which runs a full Linux
+environment inside Windows and is fully supported.
+
+**Set up WSL2:**
+
+1. Open PowerShell as Administrator and run:
+   ```powershell
+   wsl --install
+   ```
+   This installs WSL2 with Ubuntu. Restart your computer when prompted.
+
+2. Open the Ubuntu app and install Miniconda inside WSL2:
+   ```bash
+   wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+   bash Miniconda3-latest-Linux-x86_64.sh
+   # follow the prompts, then restart the shell
+   ```
+
+3. Install the tools and R inside WSL2:
+   ```bash
+   conda env create -f https://raw.githubusercontent.com/lizhencmb/iadhoreR/main/inst/conda/environment.yml
+   conda activate iadhoreR
+   conda install -c conda-forge r-base
+   ```
+
+4. Inside WSL2 R, install iadhoreR:
+   ```r
+   install.packages("remotes")
+   remotes::install_github("lizhencmb/iadhoreR", build_vignettes = TRUE)
+   ```
+
+**Using RStudio on Windows with WSL2:**
+
+Install [RStudio Desktop](https://posit.co/download/rstudio-desktop/) on
+Windows. RStudio automatically detects WSL2 and can use R installed inside it
+— see the
+[Posit WSL2 guide](https://support.posit.co/hc/en-us/articles/360049776974)
+for setup instructions.
+
+---
 
 ## Quick start
 

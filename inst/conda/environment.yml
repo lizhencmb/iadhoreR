@@ -1,8 +1,10 @@
 name: iadhoreR
 channels:
+  - lizhencmb
   - bioconda
   - conda-forge
   - defaults
 dependencies:
+  - i-adhore
   - diamond>=2.0
   - mcl
