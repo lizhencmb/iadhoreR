@@ -1,0 +1,9 @@
+name: iadhoreR
+channels:
+  - bioconda
+  - conda-forge
+  - defaults
+dependencies:
+  - i-adhore>=3.0
+  - diamond>=2.0
+  - mcl

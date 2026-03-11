@@ -1,0 +1,7 @@
+^.*\.Rproj$
+^\.Rproj\.user$
+^doc$
+^Meta$
+^\.github$
+^\.claude$
+^R/\.claude$

@@ -1,0 +1,28 @@
+Package: iadhoreR
+Type: Package
+Title: R Interface to i-ADHoRe for Detecting Genomic Collinearity
+Version: 0.1.0
+Authors@R: c(
+    person(
+      "Zhen", "Li",
+      email = "zhen.li@psb.vib-ugent.be",
+      role = c("aut", "cre")
+    )
+  )
+Description: Provides an R interface to the i-ADHoRe 3.0 software for
+    detecting collinear regions and multiplicons in genomic data. Includes
+    helper functions for preparing input files (gene lists from GFF/GTF,
+    BLAST/DIAMOND homolog tables, MCL gene family clustering) and parsing
+    all i-ADHoRe output tables into R data frames. Requires i-ADHoRe,
+    DIAMOND, and MCL to be installed and available on the PATH
+    (e.g. via conda: conda install -c bioconda i-adhore diamond mcl).
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: false
+Imports:
+    utils
+Suggests:
+    knitr,
+    rmarkdown
+VignetteBuilder: knitr
+RoxygenNote: 7.3.2

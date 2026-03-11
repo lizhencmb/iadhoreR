@@ -1,0 +1,9 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+/doc/
+/Meta/
+# scratch/test output directories
+iadhore_test/
+vvi_lists/
