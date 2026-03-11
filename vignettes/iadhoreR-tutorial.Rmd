@@ -52,40 +52,26 @@ parse_gff()   run_diamond()    write_iadhore_config()
 
 ## Installation
 
-### 1. Install iadhoreR
+Full step-by-step installation instructions are in the
+[README](https://github.com/lizhencmb/iadhoreR#installation). In brief:
 
-```r
-# From GitHub (recommended during development)
-# install.packages("remotes")
-remotes::install_github("your-org/iadhoreR")
-```
-
-### 2. Install external tools via conda
-
-iadhoreR calls three external command-line tools: **i-ADHoRe**, **DIAMOND**,
-and **MCL**. All are available on
-[Bioconda](https://bioconda.github.io).
+1. Install [R](https://cran.r-project.org) (≥ 4.0)
+2. Install [Miniconda](https://docs.conda.io/en/latest/miniconda.html) or
+   [Mambaforge](https://github.com/conda-forge/miniforge#mambaforge)
+3. Create the conda environment and activate it:
 
 ```bash
-# Create a dedicated conda environment (recommended)
-conda env create -f /path/to/environment.yml
-
-# Or install into your current environment
-conda install -c bioconda -c conda-forge i-adhore diamond mcl
+conda env create -f https://raw.githubusercontent.com/lizhencmb/iadhoreR/main/inst/conda/environment.yml
+conda activate iadhoreR
 ```
 
-The path to the bundled `environment.yml` and the exact commands for your
-system are shown by:
+4. With the environment active, install iadhoreR from R:
 
-```{r eval=FALSE}
-library(iadhoreR)
-setup_instructions()
+```r
+remotes::install_github("lizhencmb/iadhoreR", build_vignettes = TRUE)
 ```
 
-Always **activate the conda environment before launching R**, so the tools are
-on the PATH.
-
-### 3. Verify the setup
+### Verify the setup
 
 ```{r eval=FALSE}
 library(iadhoreR)

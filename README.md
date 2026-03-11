@@ -17,42 +17,82 @@ GFF + FASTA  →  parse_gff()
                                   read_iadhore_output()
 ```
 
-## Requirements
+## Installation
 
-iadhoreR calls three external tools that must be installed via
-[conda](https://docs.conda.io):
+Follow these steps in order.
+
+### Step 1 — Install R
+
+Download and install R (≥ 4.0) from https://cran.r-project.org.
+
+[RStudio](https://posit.co/download/rstudio-desktop/) is recommended as an
+IDE but not required.
+
+### Step 2 — Install conda
+
+If you do not already have conda, install
+[Miniconda](https://docs.conda.io/en/latest/miniconda.html) (lightweight) or
+[Mambaforge](https://github.com/conda-forge/miniforge#mambaforge) (faster
+solver, recommended for bioinformatics).
+
+### Step 3 — Install the external tools
+
+iadhoreR relies on three command-line tools — **i-ADHoRe**, **DIAMOND**, and
+**MCL** — which are all available on
+[Bioconda](https://bioconda.github.io).
+
+**Option A: dedicated environment (recommended)**
 
 ```bash
-conda install -c bioconda -c conda-forge i-adhore diamond mcl
-```
+# Create an environment with all tools pre-installed
+conda env create -f https://raw.githubusercontent.com/lizhencmb/iadhoreR/main/inst/conda/environment.yml
 
-Or use the bundled environment file for a self-contained setup:
-
-```bash
-# Get the environment file path from R
-Rscript -e "system.file('conda', 'environment.yml', package='iadhoreR')"
-
-# Then create the environment
-conda env create -f /path/to/environment.yml
+# Activate it
 conda activate iadhoreR
 ```
 
-> **Important:** activate the conda environment *before* launching R so that
-> the tools are on the PATH.
+**Option B: install into an existing environment**
 
-## Installation
-
-```r
-# install.packages("remotes")
-remotes::install_github("lizhencmb/iadhoreR")
+```bash
+conda activate my_existing_env
+conda install -c bioconda -c conda-forge i-adhore diamond mcl
 ```
 
-After installation, verify your setup:
+> **Important:** always activate the conda environment *before* opening R or
+> RStudio, so that the tools are on the PATH. On macOS/Linux, open a terminal,
+> activate the environment, then launch R or RStudio from that same terminal:
+>
+> ```bash
+> conda activate iadhoreR
+> open -a RStudio   # macOS
+> rstudio &         # Linux
+> ```
+
+### Step 4 — Install iadhoreR
+
+With the conda environment active, open R and run:
+
+```r
+install.packages("remotes")
+remotes::install_github("lizhencmb/iadhoreR", build_vignettes = TRUE)
+```
+
+### Step 5 — Verify
 
 ```r
 library(iadhoreR)
 check_tools()
+#> External tool status:
+#>   i-adhore     [OK]     /path/to/conda/envs/iadhoreR/bin/i-adhore
+#>   diamond      [OK]     /path/to/conda/envs/iadhoreR/bin/diamond
+#>   mcl          [OK]     /path/to/conda/envs/iadhoreR/bin/mcl
+#>   mcxload      [OK]     /path/to/conda/envs/iadhoreR/bin/mcxload
+#>   mcxdump      [OK]     /path/to/conda/envs/iadhoreR/bin/mcxdump
+#> All tools found. You are ready to use iadhoreR.
 ```
+
+If any tool shows `[MISSING]`, run `setup_instructions()` in R for
+troubleshooting guidance.
 
 ## Quick start
 
