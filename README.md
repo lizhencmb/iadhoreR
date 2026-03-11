@@ -176,7 +176,7 @@ write_iadhore_config(
   output_path = file.path(work, "output"),
   file        = file.path(work, "config.ini")
 )
-run_iadhore(file.path(work, "config.ini"), threads = 8)
+run_iadhore(file.path(work, "config.ini"))
 
 # 5. Read results
 results <- read_iadhore_output(file.path(work, "output"))
