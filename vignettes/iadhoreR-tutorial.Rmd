@@ -58,7 +58,7 @@ Full step-by-step installation instructions are in the
 1. Install [R](https://cran.r-project.org) (≥ 4.0)
 2. Install [Miniconda](https://docs.conda.io/en/latest/miniconda.html) or
    [Mambaforge](https://github.com/conda-forge/miniforge#mambaforge)
-3. Create the conda environment and activate it:
+3. Install DIAMOND and MCL via conda (i-ADHoRe is bundled with the package):
 
 ```bash
 conda env create -f https://raw.githubusercontent.com/lizhencmb/iadhoreR/main/inst/conda/environment.yml

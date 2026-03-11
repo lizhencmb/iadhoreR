@@ -29,19 +29,25 @@ check_tools <- function() {
   paths <- Sys.which(tools)
   found <- nchar(paths) > 0
 
+  # i-adhore is bundled — check via get_iadhore_bin() not Sys.which()
+  iadhore_ok <- tryCatch({ get_iadhore_bin(); TRUE }, error = function(e) FALSE)
+  iadhore_status <- if (iadhore_ok) "[OK]     bundled" else "[MISSING] bundled binary not found"
+
   cat("External tool status:\n")
+  cat(sprintf("  %-12s %s\n", "i-adhore", iadhore_status))
   for (i in seq_along(tools)) {
     status <- if (found[i]) paste0("[OK]     ", paths[i]) else "[MISSING]"
     cat(sprintf("  %-12s %s\n", tools[i], status))
   }
 
-  if (!all(found)) {
+  all_ok <- iadhore_ok && all(found)
+  if (!all_ok) {
     cat("\nOne or more tools are missing. Run setup_instructions() for help.\n")
   } else {
     cat("\nAll tools found. You are ready to use iadhoreR.\n")
   }
 
-  invisible(setNames(found, tools))
+  invisible(setNames(c(iadhore_ok, found), c("i-adhore", tools)))
 }
 
 
@@ -61,15 +67,16 @@ setup_instructions <- function() {
   env_yml <- system.file("conda", "environment.yml",
                          package = "iadhoreR", mustWork = TRUE)
 
-  cat("iadhoreR requires i-ADHoRe, DIAMOND, and MCL on your PATH.\n")
-  cat("Install them via conda (https://docs.conda.io):\n\n")
+  cat("iadhoreR setup:\n\n")
+  cat("  i-ADHoRe  -- bundled with the package (no installation needed)\n\n")
+  cat("  DIAMOND and MCL -- install via conda (https://docs.conda.io):\n\n")
 
   cat("  # Option A: create a dedicated environment (recommended)\n")
   cat("  conda env create -f", env_yml, "\n")
   cat("  conda activate iadhoreR\n\n")
 
   cat("  # Option B: install into your current environment\n")
-  cat("  conda install -c bioconda -c conda-forge i-adhore diamond mcl\n\n")
+  cat("  conda install -c bioconda -c conda-forge diamond mcl\n\n")
 
   cat("After activating the environment, launch R from that same shell\n")
   cat("so it inherits the correct PATH.\n\n")
@@ -89,15 +96,34 @@ setup_instructions <- function() {
 #' Get i-ADHoRe executable path
 #' @keywords internal
 get_iadhore_bin <- function() {
-  path <- Sys.which("i-adhore")
-  if (path == "") {
+  os <- tolower(Sys.info()["sysname"])
+
+  if (os == "darwin") {
+    arch     <- system("uname -m", intern = TRUE)
+    bin_file <- if (arch == "arm64") "i-adhore-arm64" else "i-adhore-x86_64"
+    bin_dir  <- "macos"
+  } else if (os == "linux") {
+    bin_file <- "i-adhore"
+    bin_dir  <- "linux"
+  } else if (os == "windows") {
+    bin_file <- "i-adhore.exe"
+    bin_dir  <- "windows"
+  } else {
+    stop("Unsupported operating system: ", os)
+  }
+
+  bin_path <- system.file("bin", bin_dir, bin_file,
+                          package = "iadhoreR", mustWork = FALSE)
+
+  if (bin_path == "" || !file.exists(bin_path)) {
     stop(
-      "i-ADHoRe not found in PATH.\n",
-      "Install it via conda:\n",
-      "  conda install -c bioconda i-adhore"
+      "i-ADHoRe binary not found for your platform (", os, ").\n",
+      "Please open an issue at https://github.com/lizhencmb/iadhoreR/issues"
     )
   }
-  path
+
+  Sys.chmod(bin_path, "755")
+  bin_path
 }
 
 #' Run i-ADHoRe analysis

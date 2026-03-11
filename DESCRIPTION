@@ -13,9 +13,9 @@ Description: Provides an R interface to the i-ADHoRe 3.0 software for
     detecting collinear regions and multiplicons in genomic data. Includes
     helper functions for preparing input files (gene lists from GFF/GTF,
     BLAST/DIAMOND homolog tables, MCL gene family clustering) and parsing
-    all i-ADHoRe output tables into R data frames. Requires i-ADHoRe,
-    DIAMOND, and MCL to be installed and available on the PATH
-    (e.g. via conda: conda install -c bioconda i-adhore diamond mcl).
+    all i-ADHoRe output tables into R data frames. i-ADHoRe is bundled as
+    a compiled binary. DIAMOND and MCL must be installed separately
+    (e.g. via conda: conda install -c bioconda diamond mcl).
 License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: false

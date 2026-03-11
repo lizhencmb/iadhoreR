@@ -37,17 +37,16 @@ solver, recommended for bioinformatics).
 
 ### Step 3 — Install the external tools
 
-iadhoreR relies on three command-line tools — **i-ADHoRe**, **DIAMOND**, and
-**MCL** — which are all available on
-[Bioconda](https://bioconda.github.io).
+iadhoreR relies on three tools:
+
+- **i-ADHoRe** — bundled with the package, no installation needed
+- **DIAMOND** and **MCL** — installed via [conda](https://docs.conda.io)
+  (both are on [Bioconda](https://bioconda.github.io))
 
 **Option A: dedicated environment (recommended)**
 
 ```bash
-# Create an environment with all tools pre-installed
 conda env create -f https://raw.githubusercontent.com/lizhencmb/iadhoreR/main/inst/conda/environment.yml
-
-# Activate it
 conda activate iadhoreR
 ```
 
@@ -55,7 +54,7 @@ conda activate iadhoreR
 
 ```bash
 conda activate my_existing_env
-conda install -c bioconda -c conda-forge i-adhore diamond mcl
+conda install -c bioconda -c conda-forge diamond mcl
 ```
 
 > **Important:** always activate the conda environment *before* opening R or
