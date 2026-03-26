@@ -19,6 +19,10 @@
 #'   points by the multiplicon level using a sequential palette (light = low,
 #'   dark = high).
 #' @param point_size Numeric. Size of points (default \code{0.8}).
+#' @param highlight_pars List returned by \code{\link{find_pars}}, or
+#'   \code{NULL} (default).  When supplied, each significant segment pair is
+#'   drawn as a semi-transparent coloured rectangle behind the anchorpoint
+#'   dots, with one colour per PAR.
 #'
 #' @return Invisibly returns the data frame of points that were plotted.
 #' @export
@@ -27,14 +31,19 @@
 #' plot_dotplot("output/vvi/")
 #' plot_dotplot("output/two_sp/", genome_x = "sp1", genome_y = "sp2",
 #'              chr_order = "alpha")
+#' res  <- read_iadhore_output("output/ath_vvi/")
+#' pars <- find_pars(res, "ath", "vvi")
+#' plot_dotplot(res, genome_x = "ath", genome_y = "vvi",
+#'              chr_order = "natural", highlight_pars = pars)
 #' }
 plot_dotplot <- function(output_dir,
-                         genome_x   = NULL,
-                         genome_y   = NULL,
-                         chr_order  = c("size", "natural", "alpha"),
-                         real_only  = TRUE,
-                         colour_by  = c("level", "multiplicon", "basecluster"),
-                         point_size = 0.8) {
+                         genome_x       = NULL,
+                         genome_y       = NULL,
+                         chr_order      = c("size", "natural", "alpha"),
+                         real_only      = TRUE,
+                         colour_by      = c("level", "multiplicon", "basecluster"),
+                         point_size     = 0.8,
+                         highlight_pars = NULL) {
 
   chr_order <- match.arg(chr_order)
   colour_by <- match.arg(colour_by)
@@ -174,8 +183,53 @@ plot_dotplot <- function(output_dir,
   for (i in seq_len(nrow(ly))[-1])
     graphics::abline(h = ly$offset[i], col = "grey70", lty = 2, lwd = 0.6)
 
+  # PAR highlight boxes: collect geometry first, draw fills behind dots,
+  # then redraw borders on top so they are always visible.
+  par_rects <- list()
+  if (!is.null(highlight_pars) &&
+      is.list(highlight_pars) &&
+      !is.null(highlight_pars$pairs) &&
+      nrow(highlight_pars$pairs) > 0L) {
+
+    pr <- highlight_pars$pairs
+    pr <- pr[pr$list_x %in% lx$list & pr$list_y %in% ly$list, , drop = FALSE]
+
+    if (nrow(pr) > 0L) {
+      n_par   <- max(pr$par_id)
+      pal_par <- .dotplot_palette(n_par)
+
+      for (i in seq_len(nrow(pr))) {
+        col_i <- pal_par[pr$par_id[i]]
+        gx1 <- pr$x_min[i] + off_x[pr$list_x[i]]
+        gx2 <- pr$x_max[i] + off_x[pr$list_x[i]]
+        gy1 <- pr$y_min[i] + off_y[pr$list_y[i]]
+        gy2 <- pr$y_max[i] + off_y[pr$list_y[i]]
+        par_rects[[length(par_rects) + 1L]] <- list(
+          x1 = gx1, x2 = gx2, y1 = gy1, y2 = gy2, col = col_i)
+        # Mirror for intra-genomic plots
+        if (genome_x == genome_y) {
+          par_rects[[length(par_rects) + 1L]] <- list(
+            x1 = gy1, x2 = gy2, y1 = gx1, y2 = gx2, col = col_i)
+        }
+      }
+    }
+  }
+
+  # Draw fills behind dots
+  for (r in par_rects)
+    graphics::rect(r$x1, r$y1, r$x2, r$y2,
+                   col    = grDevices::adjustcolor(r$col, alpha.f = 0.18),
+                   border = NA)
+
   # Dots
   graphics::points(ap$gx, ap$gy, col = ap$.col, pch = 20, cex = point_size)
+
+  # Draw borders on top of dots
+  for (r in par_rects)
+    graphics::rect(r$x1, r$y1, r$x2, r$y2,
+                   col    = NA,
+                   border = grDevices::adjustcolor(r$col, alpha.f = 0.85),
+                   lwd    = 1.0)
 
   graphics::box()
 
@@ -589,6 +643,517 @@ plot_genome_overview <- function(output_dir,
                    border = NA, bty = "n", cex = 0.75)
 
   invisible(seg_nr[, setdiff(names(seg_nr), c(".col", ".stack"))])
+}
+
+
+#' Draw a clustered segment dot plot with dendrogram (Fig. S1 style)
+#'
+#' Reproduces the overview plot from Jaillon \emph{et al.} (2009) Fig. S1.
+#' All significant segments from both genomes are placed on the two axes,
+#' reordered by the same average-linkage hierarchical clustering used in
+#' \code{\link{find_pars}}.  Anchorpoint dots are drawn in the main panel;
+#' dendrograms are drawn in side strips; PAR blocks are highlighted in gold.
+#'
+#' @param par_result List returned by \code{\link{find_pars}}.
+#' @param output_dir Path to the i-ADHoRe output directory, **or** a list
+#'   from \code{\link{read_iadhore_output}}.  Required to fetch anchorpoints.
+#' @param real_only Logical. Use only real anchorpoints (default \code{TRUE}).
+#' @param point_size Numeric. Dot size (default \code{0.4}).
+#' @param show_dendro Logical. Draw dendrograms (default \code{TRUE}).
+#' @param par_col Character. Colour for PAR highlight boxes (default
+#'   \code{"gold"}).
+#' @param par_alpha Numeric (0–1). Transparency of PAR boxes (default
+#'   \code{0.4}).
+#' @param label_cex Numeric. Character size for axis labels (default
+#'   \code{0.55}).
+#'
+#' @return Invisibly returns \code{par_result}.
+#' @export
+#' @examples
+#' \dontrun{
+#' res  <- read_iadhore_output("output/ath_vvi/")
+#' pars <- find_pars(res, "ath", "vvi")
+#' plot_par_overview(pars, res)
+#' }
+plot_par_overview <- function(par_result,
+                               output_dir,
+                               real_only  = TRUE,
+                               point_size = 0.4,
+                               show_dendro = TRUE,
+                               par_col    = "gold",
+                               par_alpha  = 0.4,
+                               label_cex  = 0.55) {
+
+  if (is.null(par_result) || par_result$n_pars == 0L) {
+    message("No PARs to plot"); return(invisible(NULL))
+  }
+
+  sm       <- par_result$score_matrix_sig   # filtered score matrix (rows=x, cols=y)
+  hc_x     <- par_result$hclust_x
+  hc_y     <- par_result$hclust_y
+  cl_x     <- par_result$clusters_x        # named: seg_id -> cluster
+  cl_y     <- par_result$clusters_y
+  bx       <- par_result$seg_bounds_x      # segment, list, seg_min, seg_max
+  by_      <- par_result$seg_bounds_y
+  pairs    <- par_result$pairs
+  r_cutoff <- par_result$r_cutoff
+  genome_x <- par_result$genome_x
+  genome_y <- par_result$genome_y
+  intra    <- genome_x == genome_y
+
+  nx <- nrow(sm);  ny <- ncol(sm)
+
+  # ---- Leaf ordering (display position for each row/col of sm) ----
+  # hc$order[j] = which row of sm is at display position j
+  # We need: for row i, what is its display position?  -> order(hc$order)[i]
+  if (!is.null(hc_x)) {
+    ord_x <- hc_x$order                   # permutation: display j -> sm row hc$order[j]
+    rank_x <- order(ord_x)                # rank_x[i] = display position of sm row i
+  } else {
+    ord_x <- seq_len(nx); rank_x <- seq_len(nx)
+  }
+  if (!is.null(hc_y)) {
+    ord_y <- hc_y$order
+    rank_y <- order(ord_y)
+  } else {
+    ord_y <- seq_len(ny); rank_y <- seq_len(ny)
+  }
+
+  # Segment IDs (character) in sm order
+  seg_ids_x <- rownames(sm)   # character, length nx
+  seg_ids_y <- colnames(sm)
+
+  # ---- Load & filter anchorpoints ----
+  dat   <- .load_iadhore(output_dir)
+  ap    <- dat$anchorpoints
+  mults <- dat$multiplicons
+  if (real_only) ap <- ap[ap$is_real_anchorpoint != 0, , drop = FALSE]
+  ap <- merge(ap,
+              mults[, c("id", "genome_x", "list_x", "genome_y", "list_y")],
+              by.x = "multiplicon", by.y = "id", all.x = TRUE, sort = FALSE)
+  fwd     <- !is.na(ap$genome_x) & ap$genome_x == genome_x & ap$genome_y == genome_y
+  rev_dir <- !is.na(ap$genome_x) & ap$genome_x == genome_y &
+             ap$genome_y == genome_x & !intra
+  if (any(rev_dir)) {
+    ar <- ap[rev_dir, , drop = FALSE]
+    for (p in list(c("gene_x","gene_y"), c("coord_x","coord_y"),
+                   c("genome_x","genome_y"), c("list_x","list_y"))) {
+      tmp <- ar[[p[1L]]]; ar[[p[1L]]] <- ar[[p[2L]]]; ar[[p[2L]]] <- tmp
+    }
+    ap <- rbind(ap[fwd, , drop = FALSE], ar)
+  } else {
+    ap <- ap[fwd, , drop = FALSE]
+  }
+  if (intra) {   # mirror
+    ap_m <- ap
+    for (p in list(c("list_x","list_y"), c("coord_x","coord_y"), c("gene_x","gene_y"))) {
+      tmp <- ap_m[[p[1L]]]; ap_m[[p[1L]]] <- ap_m[[p[2L]]]; ap_m[[p[2L]]] <- tmp
+    }
+    ap <- rbind(ap, ap_m)
+  }
+
+  # ---- Map anchorpoints -> display coordinates ----
+  # seg_id -> row index in sm  (and then -> display position via rank_x/rank_y)
+  sid_to_row_x <- stats::setNames(seq_len(nx), seg_ids_x)
+  sid_to_row_y <- stats::setNames(seq_len(ny), seg_ids_y)
+
+  # For each anchorpoint, find which x-segment (by coordinate range)
+  ap_xi <- integer(nrow(ap))   # sm row index (1-based), 0 = not found
+  for (i in seq_len(nrow(bx))) {
+    hit <- ap$list_x == bx$list[i] &
+           ap$coord_x >= bx$seg_min[i] & ap$coord_x <= bx$seg_max[i]
+    ap_xi[hit] <- sid_to_row_x[as.character(bx$segment[i])]
+  }
+  ap_yi <- integer(nrow(ap))
+  for (j in seq_len(nrow(by_))) {
+    hit <- ap$list_y == by_$list[j] &
+           ap$coord_y >= by_$seg_min[j] & ap$coord_y <= by_$seg_max[j]
+    ap_yi[hit] <- sid_to_row_y[as.character(by_$segment[j])]
+  }
+  keep <- ap_xi > 0L & ap_yi > 0L
+  xi_k <- ap_xi[keep]; yi_k <- ap_yi[keep]; ap_k <- ap[keep, , drop = FALSE]
+
+  # Display position of each anchorpoint (segment midpoint ± fractional offset)
+  # Coordinate system: x,y in (0.5, n+0.5); segment at rank r centred at r.
+  bx_min <- bx$seg_min; bx_max <- bx$seg_max; bx_seg <- bx$segment
+  by_min <- by_$seg_min; by_max <- by_$seg_max; by_seg <- by_$segment
+
+  frac_x <- (ap_k$coord_x - bx_min[xi_k]) /
+             pmax(1L, bx_max[xi_k] - bx_min[xi_k])
+  frac_y <- (ap_k$coord_y - by_min[yi_k]) /
+             pmax(1L, by_max[yi_k] - by_min[yi_k])
+
+  # ---- Layout ----
+  old_par <- graphics::par(no.readonly = TRUE)
+  on.exit(graphics::par(old_par), add = TRUE)
+
+  if (show_dendro && (!is.null(hc_x) || !is.null(hc_y))) {
+    dw <- 0.13   # fraction of width  for left dendrogram
+    dh <- 0.13   # fraction of height for top dendrogram
+    graphics::layout(
+      matrix(c(0L, 1L, 2L, 3L), nrow = 2L, byrow = TRUE),
+      widths  = c(dw, 1 - dw),
+      heights = c(dh, 1 - dh)
+    )
+  } else {
+    graphics::layout(matrix(1L, 1L, 1L))
+  }
+
+  # ---- Dendrogram helper ----
+  # Compute line segments for a hclust tree.
+  # Returns list(segs, leaf_rank, max_h):
+  #   segs     = data.frame(x0,y0,x1,y1) in (position 1..n, height) space
+  #   leaf_rank[i] = display position of leaf i (same as order(hc$order))
+  .ds <- function(hc) {
+    n    <- length(hc$order)
+    lpos <- integer(n); lpos[hc$order] <- seq_len(n)
+    npos <- numeric(n - 1L)
+    mat  <- matrix(0.0, 3L * (n - 1L), 4L,
+                   dimnames = list(NULL, c("x0","y0","x1","y1")))
+    row  <- 1L
+    .xp <- function(v) if (v < 0L) lpos[-v]      else npos[v]
+    .yp <- function(v) if (v < 0L) 0.0           else hc$height[v]
+    for (k in seq_len(n - 1L)) {
+      a <- hc$merge[k,1L]; b <- hc$merge[k,2L]
+      xa <- .xp(a); ya <- .yp(a); xb <- .xp(b); yb <- .yp(b); yk <- hc$height[k]
+      npos[k] <- (xa + xb) / 2
+      mat[row,  ] <- c(xa, ya, xa, yk)
+      mat[row+1,] <- c(xb, yb, xb, yk)
+      mat[row+2,] <- c(xa, yk, xb, yk)
+      row <- row + 3L
+    }
+    list(segs = as.data.frame(mat), leaf_rank = lpos, max_h = max(hc$height))
+  }
+
+  # Note: the top-left cell (value 0 in the layout matrix) is skipped
+  # automatically by graphics::layout() — no plot.new() needed there.
+
+  # Shared margins: the non-shared edges of each dendrogram panel must match
+  # the corresponding edge of the main plot so both panels have identical
+  # plot-area widths/heights and leaves line up with segments exactly.
+  #   top dendro  : left & right must match main plot left & right  (0.5 and 4)
+  #   left dendro : top & bottom must match main plot top & bottom  (0.5 and 4)
+  mar_main   <- c(4, 0.5, 0.5, 4)   # bottom, left, top, right of main panel
+  mar_top_d  <- c(0, mar_main[2L], 1, mar_main[4L])   # top dendro
+  mar_left_d <- c(mar_main[1L], 1, mar_main[3L], 0)   # left dendro
+
+  # Both dendrograms and the main plot use the same x/y coordinate space:
+  #   x in (0.5, nx+0.5)  —  segment at rank j centred at j
+  #   y in (0.5, ny+0.5)  —  segment at rank j centred at j
+  # This makes dendrogram leaf positions (integers 1..n) coincide with
+  # segment centres in the main panel.
+
+  # ---- Panel 1: top dendrogram (genome_x) ----
+  if (show_dendro && !is.null(hc_x)) {
+    graphics::par(mar = mar_top_d)
+    ds_x    <- .ds(hc_x)
+    h_cut_x <- (1 - r_cutoff) / 2
+    graphics::plot.new()
+    graphics::plot.window(xlim = c(0.5, nx + 0.5), ylim = c(0, ds_x$max_h * 1.15))
+    graphics::segments(ds_x$segs$x0, ds_x$segs$y0,
+                       ds_x$segs$x1, ds_x$segs$y1, col = "grey20", lwd = 0.7)
+    graphics::abline(h = h_cut_x, lty = 2, col = "grey50", lwd = 0.6)
+    graphics::mtext(genome_x, side = 3, line = 0, cex = 0.75, font = 2)
+  } else if (show_dendro) {
+    graphics::par(mar = mar_top_d); graphics::plot.new()
+  }
+
+  # ---- Panel 2: left dendrogram (genome_y, rotated 90°) ----
+  if (show_dendro && !is.null(hc_y)) {
+    graphics::par(mar = mar_left_d)
+    ds_y    <- .ds(hc_y)
+    h_cut_y <- (1 - r_cutoff) / 2
+    graphics::plot.new()
+    # x = depth (root left, leaves right), y = leaf position matching main ylim
+    graphics::plot.window(xlim = c(ds_y$max_h * 1.15, 0), ylim = c(0.5, ny + 0.5))
+    graphics::segments(ds_y$segs$y0, ds_y$segs$x0,
+                       ds_y$segs$y1, ds_y$segs$x1, col = "grey20", lwd = 0.7)
+    graphics::abline(v = h_cut_y, lty = 2, col = "grey50", lwd = 0.6)
+    graphics::mtext(genome_y, side = 2, line = 0, cex = 0.75, font = 2, las = 0)
+  } else if (show_dendro) {
+    graphics::par(mar = mar_left_d); graphics::plot.new()
+  }
+
+  # ---- Panel 3 (or 1 without dendro): main dot plot ----
+  # Coordinate system: x in (0.5, nx+0.5), y in (0.5, ny+0.5).
+  # Segment at rank j is centred at j and spans [j-0.5, j+0.5].
+  # Anchorpoint at fraction f within a segment → display = rank + f - 0.5.
+  px <- rank_x[xi_k] + frac_x - 0.5
+  py <- rank_y[yi_k] + frac_y - 0.5
+
+  graphics::par(mar = mar_main)
+  graphics::plot.new()
+  graphics::plot.window(xlim = c(0.5, nx + 0.5), ylim = c(0.5, ny + 0.5))
+
+  # Alternating-shade columns and rows
+  for (i in seq_len(nx)) {
+    if (i %% 2 == 0)
+      graphics::rect(i - 0.5, 0.5, i + 0.5, ny + 0.5, col = "#f7f7f7", border = NA)
+  }
+  for (j in seq_len(ny)) {
+    if (j %% 2 == 0)
+      graphics::rect(0.5, j - 0.5, nx + 0.5, j + 0.5, col = "#f7f7f7", border = NA)
+  }
+
+  # PAR highlight fills (drawn first, behind dots)
+  par_boxes <- if (nrow(pairs) > 0L) {
+    lapply(sort(unique(pairs$par_id)), function(pid) {
+      pr  <- pairs[pairs$par_id == pid, , drop = FALSE]
+      rxi <- rank_x[sid_to_row_x[as.character(pr$seg_x_id)]]
+      ryi <- rank_y[sid_to_row_y[as.character(pr$seg_y_id)]]
+      list(pid = pid,
+           x1  = min(rxi) - 0.5, x2 = max(rxi) + 0.5,
+           y1  = min(ryi) - 0.5, y2 = max(ryi) + 0.5)
+    })
+  } else list()
+
+  for (b in par_boxes)
+    graphics::rect(b$x1, b$y1, b$x2, b$y2,
+                   col    = grDevices::adjustcolor(par_col, alpha.f = par_alpha),
+                   border = NA)
+
+  # Segment separator lines at boundaries between segments (thin grey)
+  for (i in seq_len(nx - 1L))
+    graphics::abline(v = i + 0.5, col = "grey80", lty = 1, lwd = 0.3)
+  for (j in seq_len(ny - 1L))
+    graphics::abline(h = j + 0.5, col = "grey80", lty = 1, lwd = 0.3)
+
+  # Cluster boundary lines (green, thicker) — drawn at cluster group edges
+  .cluster_breaks <- function(clusters, ord) {
+    cl_ordered <- clusters[ord]
+    which(diff(cl_ordered) != 0)
+  }
+  if (!is.null(hc_x) && length(unique(cl_x)) > 1L) {
+    brk_x <- .cluster_breaks(cl_x, ord_x)
+    for (b in brk_x)
+      graphics::abline(v = b, col = "green3", lty = 1, lwd = 1.0)
+  }
+  if (!is.null(hc_y) && length(unique(cl_y)) > 1L) {
+    brk_y <- .cluster_breaks(cl_y, ord_y)
+    for (b in brk_y)
+      graphics::abline(h = b, col = "green3", lty = 1, lwd = 1.0)
+  }
+
+  # Dots
+  if (length(px) > 0L)
+    graphics::points(px, py, pch = 20, cex = point_size, col = "black")
+
+  # PAR borders and ID labels drawn on top of dots so they are always visible
+  for (b in par_boxes) {
+    graphics::rect(b$x1, b$y1, b$x2, b$y2,
+                   col    = NA,
+                   border = grDevices::adjustcolor(par_col, alpha.f = 0.9),
+                   lwd    = 1.2)
+    graphics::text(b$x1 + 0.05, b$y2 - 0.05,
+                   labels = sprintf("PAR%02d", b$pid),
+                   adj = c(0, 1), cex = 0.35, col = "grey10", font = 2)
+  }
+
+  graphics::box()
+
+  # Axes: genome-level chromosome labels (one label per chromosome, centred)
+  .chr_axis <- function(bounds, rank_fn, total, side) {
+    chr_uniq <- unique(bounds$list)
+    for (ch in chr_uniq) {
+      rows   <- bounds[bounds$list == ch, , drop = FALSE]
+      ranks  <- rank_fn(as.character(rows$segment))
+      mid    <- (min(ranks) + max(ranks)) / 2
+      graphics::mtext(ch, side = side, at = mid,
+                      las = if (side %in% c(1L,3L)) 2L else 2L,
+                      cex = label_cex, line = 0.3)
+    }
+  }
+  .chr_axis(bx,  function(ids) rank_x[sid_to_row_x[ids]], nx, side = 1L)
+  .chr_axis(by_, function(ids) rank_y[sid_to_row_y[ids]], ny, side = 4L)
+
+  invisible(par_result)
+}
+
+
+#' Draw fine-resolution dot plots for individual PARs (Fig. S2 style)
+#'
+#' For each requested PAR, draws a dot plot with all member segments
+#' concatenated along each axis, separated by green lines, and labelled with
+#' \code{chromosome:start-stop}.  The layout mirrors Fig. S2 of Tang \emph{et
+#' al.} (2009) \emph{PNAS} 106:14712.
+#'
+#' @param output_dir Path to the i-ADHoRe output directory, **or** a list
+#'   already returned by \code{\link{read_iadhore_output}}.
+#' @param par_result List returned by \code{\link{find_pars}}.
+#' @param par_ids Integer vector of PAR IDs to draw (default: all).
+#' @param real_only Logical. Plot only real anchorpoints (default \code{TRUE}).
+#' @param point_size Numeric. Dot size (default \code{0.8}).
+#' @param label_cex Numeric. Character size for segment axis labels
+#'   (default \code{0.45}).
+#'
+#' @return Invisibly returns \code{par_result}.
+#' @export
+#' @examples
+#' \dontrun{
+#' res  <- read_iadhore_output("output/ath_vvi/")
+#' pars <- find_pars(res, "ath", "vvi")
+#' plot_par(res, pars)                 # all PARs, one per page
+#' plot_par(res, pars, par_ids = 1:6)  # first 6 only
+#' }
+plot_par <- function(output_dir,
+                      par_result,
+                      par_ids    = NULL,
+                      real_only  = TRUE,
+                      point_size = 0.8,
+                      label_cex  = 0.55) {
+
+  if (is.null(par_result) || par_result$n_pars == 0L ||
+      nrow(par_result$pairs) == 0L) {
+    message("No PARs to plot"); return(invisible(NULL))
+  }
+
+  pairs    <- par_result$pairs
+  genome_x <- par_result$genome_x
+  genome_y <- par_result$genome_y
+  intra    <- genome_x == genome_y
+
+  dat   <- .load_iadhore(output_dir)
+  ap    <- dat$anchorpoints
+  mults <- dat$multiplicons
+
+  if (real_only) ap <- ap[ap$is_real_anchorpoint != 0, , drop = FALSE]
+
+  # Attach genome / list info from multiplicons
+  ap <- merge(ap,
+              mults[, c("id", "genome_x", "list_x", "genome_y", "list_y")],
+              by.x = "multiplicon", by.y = "id",
+              all.x = TRUE, sort = FALSE)
+
+  # Normalise direction so genome_x cols always correspond to the genome_x arg
+  fwd     <- !is.na(ap$genome_x) & ap$genome_x == genome_x & ap$genome_y == genome_y
+  rev_dir <- !is.na(ap$genome_x) & ap$genome_x == genome_y &
+             ap$genome_y == genome_x & !intra
+  if (any(rev_dir)) {
+    ar <- ap[rev_dir, , drop = FALSE]
+    for (p in list(c("gene_x","gene_y"), c("coord_x","coord_y"),
+                   c("genome_x","genome_y"), c("list_x","list_y"))) {
+      tmp <- ar[[p[1L]]]; ar[[p[1L]]] <- ar[[p[2L]]]; ar[[p[2L]]] <- tmp
+    }
+    ap <- rbind(ap[fwd, , drop = FALSE], ar)
+  } else {
+    ap <- ap[fwd, , drop = FALSE]
+  }
+
+  # For intra-genomic add mirrored anchorpoints (both directions)
+  if (intra) {
+    ap_m <- ap
+    for (p in list(c("list_x","list_y"), c("coord_x","coord_y"), c("gene_x","gene_y"))) {
+      tmp <- ap_m[[p[1L]]]; ap_m[[p[1L]]] <- ap_m[[p[2L]]]; ap_m[[p[2L]]] <- tmp
+    }
+    ap <- rbind(ap, ap_m)
+  }
+
+  # Which PARs to draw
+  all_ids <- sort(unique(pairs$par_id))
+  if (is.null(par_ids)) par_ids <- all_ids
+  par_ids <- intersect(as.integer(par_ids), all_ids)
+  n_plot  <- length(par_ids)
+  if (n_plot == 0L) { message("No valid PAR IDs"); return(invisible(NULL)) }
+
+  old_par <- graphics::par(mfrow = c(1L, 1L),
+                             mar   = c(6, 0.5, 2.5, 8))
+  on.exit(graphics::par(old_par), add = TRUE)
+
+  GAP <- 5L   # gene units of padding between concatenated segments
+
+  # Natural sort: sort data frame by numeric part of a column then by full string
+  .nat_sort <- function(df, chr_col, pos_col) {
+    num <- suppressWarnings(as.integer(gsub("[^0-9]", "", df[[chr_col]])))
+    df[order(num, df[[chr_col]], df[[pos_col]]), ]
+  }
+
+  for (pid in par_ids) {
+    pr <- pairs[pairs$par_id == pid, , drop = FALSE]
+
+    # Unique segments for this PAR, sorted naturally
+    xs <- unique(pr[, c("list_x", "x_min", "x_max")])
+    ys <- unique(pr[, c("list_y", "y_min", "y_max")])
+    xs <- .nat_sort(xs, "list_x", "x_min")
+    ys <- .nat_sort(ys, "list_y", "y_min")
+    nx <- nrow(xs); ny <- nrow(ys)
+
+    # Widths / heights and cumulative offsets (segments separated by GAP)
+    xw <- xs$x_max - xs$x_min + 1L
+    yh <- ys$y_max - ys$y_min + 1L
+    xo <- cumsum(c(0L, head(xw, -1L) + GAP))
+    yo <- cumsum(c(0L, head(yh, -1L) + GAP))
+    tot_x <- tail(xo, 1L) + tail(xw, 1L)
+    tot_y <- tail(yo, 1L) + tail(yh, 1L)
+
+    # Assign each anchorpoint to an x-segment index (0 = not in this PAR)
+    xi_vec <- integer(nrow(ap))
+    for (i in seq_len(nx)) {
+      hit <- ap$list_x == xs$list_x[i] &
+             ap$coord_x >= xs$x_min[i] &
+             ap$coord_x <= xs$x_max[i]
+      xi_vec[hit] <- i
+    }
+    yi_vec <- integer(nrow(ap))
+    for (j in seq_len(ny)) {
+      hit <- ap$list_y == ys$list_y[j] &
+             ap$coord_y >= ys$y_min[j] &
+             ap$coord_y <= ys$y_max[j]
+      yi_vec[hit] <- j
+    }
+
+    keep  <- xi_vec > 0L & yi_vec > 0L
+    xi_k  <- xi_vec[keep]
+    yi_k  <- yi_vec[keep]
+    ap_k  <- ap[keep, , drop = FALSE]
+    px    <- xo[xi_k] + (ap_k$coord_x - xs$x_min[xi_k])
+    py    <- yo[yi_k] + (ap_k$coord_y - ys$y_min[yi_k])
+
+    # ---- Draw panel ----
+    mg <- GAP
+    graphics::plot.new()
+    graphics::plot.window(xlim = c(-mg, tot_x + mg), ylim = c(-mg, tot_y + mg))
+
+    # White background with border
+    graphics::rect(0, 0, tot_x, tot_y, col = "white", border = "black", lwd = 0.8)
+
+    # Green vertical separators between x-segments
+    if (nx > 1L) {
+      for (i in seq(2L, nx)) {
+        xv <- xo[i] - GAP / 2
+        graphics::segments(xv, 0, xv, tot_y, col = "green3", lwd = 0.7)
+      }
+    }
+    # Green horizontal separators between y-segments
+    if (ny > 1L) {
+      for (j in seq(2L, ny)) {
+        yh_line <- yo[j] - GAP / 2
+        graphics::segments(0, yh_line, tot_x, yh_line, col = "green3", lwd = 0.7)
+      }
+    }
+
+    # Anchorpoint dots
+    if (length(px) > 0L)
+      graphics::points(px, py, pch = 20, cex = point_size, col = "black")
+
+    # Title
+    graphics::title(main = sprintf("PAR%02d", pid),
+                    col.main = "#005bb5", cex.main = 0.9, font.main = 2,
+                    line = 0.4)
+
+    # X-axis segment labels (below, rotated 90°)
+    graphics::axis(1,
+                   at     = xo + xw / 2,
+                   labels = paste0(xs$list_x, ":", xs$x_min, "-", xs$x_max),
+                   tick   = FALSE, las = 2, cex.axis = label_cex, line = 0.3)
+
+    # Y-axis segment labels (right side, horizontal)
+    graphics::axis(4,
+                   at     = yo + yh / 2,
+                   labels = paste0(ys$list_y, ":", ys$y_min, "-", ys$y_max),
+                   tick   = FALSE, las = 2, cex.axis = label_cex, line = 0.3)
+  }
+
+  invisible(par_result)
 }
 
 

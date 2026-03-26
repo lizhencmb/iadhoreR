@@ -2,6 +2,9 @@
 
 export(blast_to_families)
 export(check_tools)
+export(find_pars)
+export(plot_par)
+export(plot_par_overview)
 export(colinear_portions)
 export(homolog_groups)
 export(iadhore_summary)

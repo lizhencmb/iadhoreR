@@ -119,6 +119,14 @@ cat("Group size distribution:\n"); print(table(hg$group_size))
 cat("Largest groups:\n")
 print(head(hg[order(-hg$group_size, hg$homolog_group), ]))
 
+# ── Step 7b: PAR analysis ─────────────────────────────────────────────────────
+cat("\n--- Step 7b: find_pars() ath vs vvi ---\n")
+pars_av <- find_pars(results, genome_x = "ath", genome_y = "vvi")
+cat("PAR pairs (first 6):\n"); print(head(pars_av$pairs))
+
+cat("\n--- Step 7c: find_pars() ath intra ---\n")
+pars_ath <- find_pars(results, genome_x = "ath")
+
 # ── Step 8: visualisations ────────────────────────────────────────────────────
 cat("\n--- Step 8: visualisations ---\n")
 
@@ -127,17 +135,19 @@ cat("Anchorpoint counts by is_real_anchorpoint:\n"); print(ap_tab)
 
 pdf(file.path(work, "plots.pdf"), width = 10, height = 8)
 
-# 8a. Inter-genomic dot plot: ath vs vvi
+# 8a. Inter-genomic dot plot: ath vs vvi  (with PAR highlights)
 cat("  plot_dotplot() ath vs vvi ...\n")
 plot_dotplot(results,
-             genome_x  = "ath", genome_y = "vvi",
-             chr_order = "natural")
+             genome_x       = "ath", genome_y = "vvi",
+             chr_order      = "natural",
+             highlight_pars = pars_av)
 
-# 8b. Intra-genomic dot plot: ath vs ath
+# 8b. Intra-genomic dot plot: ath vs ath  (with PAR highlights)
 cat("  plot_dotplot() ath intra ...\n")
 plot_dotplot(results,
-             genome_x  = "ath", genome_y = "ath",
-             chr_order = "natural")
+             genome_x       = "ath", genome_y = "ath",
+             chr_order      = "natural",
+             highlight_pars = pars_ath)
 
 # 8c. Intra-genomic dot plot: vvi vs vvi
 cat("  plot_dotplot() vvi intra ...\n")
@@ -159,6 +169,18 @@ cat(sprintf("  plot_multiplicon() for multiplicon %d ...\n", first_mult))
 plot_multiplicon(results, multiplicon_id = first_mult)
 
 dev.off()
+
+# ── Step 9: PAR dot plots (Fig. S2 style) ─────────────────────────────────────
+cat("\n--- Step 9: plot_par() ---\n")
+pdf(file.path(work, "par_plots_ath_vvi.pdf"), width = 12, height = 10)
+plot_par(results, pars_av)
+dev.off()
+cat("PAR plots written to:", file.path(work, "par_plots_ath_vvi.pdf"), "\n")
+
+pdf(file.path(work, "par_plots_ath_intra.pdf"), width = 12, height = 10)
+plot_par(results, pars_ath)
+dev.off()
+cat("PAR plots (ath intra) written to:", file.path(work, "par_plots_ath_intra.pdf"), "\n")
 
 cat("\n=== All steps completed ===\n")
 cat("Output:  ", output_path, "\n")
