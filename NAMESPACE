@@ -3,6 +3,7 @@
 export(blast_to_families)
 export(check_tools)
 export(colinear_portions)
+export(homolog_groups)
 export(iadhore_summary)
 export(inspect_gff)
 export(multiplicated_portions)

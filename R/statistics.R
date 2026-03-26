@@ -311,3 +311,104 @@ iadhore_summary <- function(output_dir, digits = 2) {
 
   invisible(list(colinear = cp, multiplicated = mp))
 }
+
+
+#' Extract homologous gene groups from i-ADHoRe output
+#'
+#' Builds connected components across all anchor pairs from all multiplicons.
+#' Because i-ADHoRe stores anchor pairs for every level (level 2 pairs between
+#' the two founding segments, level 3 pairs between the profile and the new
+#' segment, etc.), running union-find on the full anchor point table naturally
+#' captures transitivity: if A-B and A-C are anchor pairs in any multiplicon,
+#' A, B and C are placed in the same homolog group.
+#'
+#' @param output_dir Path to the i-ADHoRe output directory, **or** a list
+#'   already returned by \code{\link{read_iadhore_output}}.
+#' @param real_only Logical. If \code{TRUE} (default), only real anchor points
+#'   (\code{is_real_anchorpoint != 0}) are used.
+#'
+#' @return A data frame with one row per gene that participates in at least one
+#'   anchor pair, with columns:
+#'   \describe{
+#'     \item{homolog_group}{Integer group ID (same value = same homolog group)}
+#'     \item{group_size}{Number of genes in the group}
+#'     \item{gene}{Gene name}
+#'     \item{genome}{Genome the gene belongs to}
+#'     \item{list}{Chromosome / scaffold}
+#'     \item{coordinate}{Gene position (original coordinate)}
+#'     \item{remapped_coordinate}{Position after tandem collapsing}
+#'     \item{orientation}{Strand (\code{"+"} or \code{"-"})}
+#'   }
+#'   Rows are sorted by \code{homolog_group}, then \code{genome},
+#'   \code{list}, \code{coordinate}.
+#'
+#' @export
+#' @examples
+#' \dontrun{
+#' hg <- homolog_groups("output/vvi/")
+#' # groups with the most members
+#' head(hg[order(-hg$group_size), ])
+#' # count genes per group
+#' table(hg$group_size)
+#' }
+homolog_groups <- function(output_dir, real_only = TRUE) {
+  dat <- .load_iadhore(output_dir)
+  ap  <- dat$anchorpoints
+  if (real_only) ap <- ap[ap$is_real_anchorpoint != 0, ]
+
+  if (nrow(ap) == 0L) {
+    message("No anchor points found (try real_only = FALSE).")
+    return(data.frame(homolog_group = integer(), group_size = integer(),
+                      gene = character(), genome = character(),
+                      list = character(), coordinate = integer(),
+                      remapped_coordinate = integer(),
+                      orientation = character(),
+                      stringsAsFactors = FALSE))
+  }
+
+  # Union-find using an environment (reference semantics, no <<-)
+  all_genes <- unique(c(ap$gene_x, ap$gene_y))
+  uf <- new.env(hash = TRUE, parent = emptyenv())
+  for (g in all_genes) uf[[g]] <- g
+
+  uf_find <- function(x) {
+    while (uf[[x]] != x) {
+      uf[[x]] <- uf[[uf[[x]]]]
+      x <- uf[[x]]
+    }
+    x
+  }
+
+  for (k in seq_len(nrow(ap))) {
+    rx <- uf_find(ap$gene_x[k])
+    ry <- uf_find(ap$gene_y[k])
+    if (rx != ry) uf[[ry]] <- rx
+  }
+  for (g in all_genes) uf[[g]] <- uf_find(g)
+
+  # Assign numeric group IDs in order of first appearance
+  roots      <- vapply(all_genes, function(g) uf[[g]], character(1))
+  uniq_roots <- unique(roots)
+  group_id   <- setNames(seq_along(uniq_roots), uniq_roots)
+
+  # Group sizes
+  root_tbl   <- table(roots)
+  group_size <- as.integer(root_tbl[roots])
+
+  # Join with gene metadata
+  gene_info <- dat$genes[dat$genes$id %in% all_genes,
+                          c("id", "genome", "list", "coordinate",
+                            "remapped_coordinate", "orientation")]
+
+  out <- data.frame(
+    homolog_group = group_id[roots],
+    group_size    = group_size,
+    gene          = all_genes,
+    stringsAsFactors = FALSE
+  )
+  out <- merge(out, gene_info, by.x = "gene", by.y = "id", all.x = TRUE)
+  out <- out[order(out$homolog_group, out$genome, out$list, out$coordinate), ]
+  rownames(out) <- NULL
+  out[, c("homolog_group", "group_size", "gene", "genome", "list",
+          "coordinate", "remapped_coordinate", "orientation")]
+}

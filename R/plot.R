@@ -79,9 +79,25 @@ plot_dotplot <- function(output_dir,
               by.x = "multiplicon", by.y = "id",
               all.x = TRUE, sort = FALSE)
 
-  # Keep only anchorpoints that belong to the selected genome pair
-  ap <- ap[!is.na(ap$genome_x) &
-             ap$genome_x == genome_x & ap$genome_y == genome_y, , drop = FALSE]
+  # Keep only anchorpoints that belong to the selected genome pair.
+  # i-ADHoRe may store either direction, so accept both orientations and
+  # normalise reversed rows so genome_x/list_x always correspond to genome_x arg.
+  fwd <- !is.na(ap$genome_x) &
+           ap$genome_x == genome_x & ap$genome_y == genome_y
+  rev_dir <- !is.na(ap$genome_x) &
+               ap$genome_x == genome_y & ap$genome_y == genome_x &
+               genome_x != genome_y   # don't double-count intra-genomic
+  if (any(rev_dir)) {
+    ap_rev <- ap[rev_dir, , drop = FALSE]
+    # Swap x/y columns
+    tmp_genome          <- ap_rev$genome_x; ap_rev$genome_x <- ap_rev$genome_y;  ap_rev$genome_y <- tmp_genome
+    tmp_list            <- ap_rev$list_x;   ap_rev$list_x   <- ap_rev$list_y;    ap_rev$list_y   <- tmp_list
+    tmp_gene            <- ap_rev$gene_x;   ap_rev$gene_x   <- ap_rev$gene_y;    ap_rev$gene_y   <- tmp_gene
+    tmp_coord           <- ap_rev$coord_x;  ap_rev$coord_x  <- ap_rev$coord_y;   ap_rev$coord_y  <- tmp_coord
+    ap <- rbind(ap[fwd, , drop = FALSE], ap_rev)
+  } else {
+    ap <- ap[fwd, , drop = FALSE]
+  }
 
   if (real_only) ap <- ap[ap$is_real_anchorpoint != 0, , drop = FALSE]
 
@@ -531,8 +547,9 @@ plot_genome_overview <- function(output_dir,
     graphics::segments(0, yb, csz, yb, lwd = 2.5, col = "black")
     graphics::mtext(ch, side = 2, at = yb, las = 1, cex = 0.75, line = 0.5)
 
-    # Segments stacked above baseline
+    # Segments stacked above baseline — draw level 2 first, then 3, 4, …
     idx <- which(seg_nr$list == ch & !is.na(seg_nr$.stack))
+    idx <- idx[order(seg_nr$level[idx], na.last = TRUE)]
     for (i in idx) {
       stk <- seg_nr$.stack[i]
       y0  <- yb + (stk - 1L) * seg_height + seg_height * 0.1
