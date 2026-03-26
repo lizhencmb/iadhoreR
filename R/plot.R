@@ -293,13 +293,22 @@ plot_multiplicon <- function(output_dir,
     fill_col  <- grDevices::adjustcolor(base_col, alpha.f = band_alpha)
     edge_col  <- grDevices::adjustcolor(base_col, alpha.f = min(1, band_alpha + 0.3))
 
-    # Band edges: inner face of each gene box (facing the other track)
+    # Band edges: match the exact bottom edge of each arrow polygon
+    # Forward (+): body spans x-bw to x+bw*0.4
+    # Reverse (-): body spans x-bw*0.4 to x+bw
+    o1  <- rx$orientation[1]
+    o2  <- ry$orientation[1]
+    x1l <- if (!is.na(o1) && o1 == "-") x1 - bw * 0.4 else x1 - bw
+    x1r <- if (!is.na(o1) && o1 == "-") x1 + bw       else x1 + bw * 0.4
+    x2l <- if (!is.na(o2) && o2 == "-") x2 - bw * 0.4 else x2 - bw
+    x2r <- if (!is.na(o2) && o2 == "-") x2 + bw       else x2 + bw * 0.4
+
     y1e <- if (y1 > y2) y1 - bh else y1 + bh
     y2e <- if (y2 > y1) y2 - bh else y2 + bh
 
     graphics::polygon(
-      x      = c(x1 - bw, x1 + bw, x2 + bw, x2 - bw),
-      y      = c(y1e,     y1e,     y2e,     y2e),
+      x      = c(x1l, x1r, x2r, x2l),
+      y      = c(y1e, y1e, y2e, y2e),
       col    = fill_col,
       border = edge_col,
       lwd    = 0.6
@@ -549,7 +558,9 @@ plot_genome_overview <- function(output_dir,
 }
 
 
-# Internal: simple colour palette
+# Internal: qualitative colour palette.
+# For n <= 16 uses a fixed high-contrast set; for larger n uses golden-angle
+# hue spacing in HCL space, which keeps consecutive colours maximally apart.
 .dotplot_palette <- function(n) {
   if (n == 0L) return(character(0))
   base_colours <- c(
@@ -561,6 +572,8 @@ plot_genome_overview <- function(output_dir,
   if (n <= length(base_colours)) {
     return(base_colours[seq_len(n)])
   }
-  # Fall back to grDevices rainbow for large n
-  grDevices::rainbow(n, s = 0.8, v = 0.85)
+  # Golden-angle spacing: each successive hue is ~137.5° away, so no two
+  # nearby indices share a similar hue regardless of n
+  hues <- (seq(0, n - 1L) * 137.508) %% 360
+  grDevices::hcl(h = hues, c = 70, l = 58)
 }
