@@ -270,6 +270,12 @@ vignette("iadhoreR-tutorial", package = "iadhoreR")
 | `write_iadhore_config()` | Write i-ADHoRe configuration file |
 | `run_iadhore()` | Run i-ADHoRe |
 | `read_iadhore_output()` | Read all output tables into a named list |
+| `colinear_portions()` | Per-list colinearity percentages between genomes |
+| `multiplicated_portions()` | Per-list duplication level breakdown |
+| `iadhore_summary()` | Print a text summary of collinearity and duplication |
+| `plot_dotplot()` | Synteny dot plot coloured by multiplicon/basecluster |
+| `plot_multiplicon()` | Segment track diagram for a single multiplicon |
+| `plot_genome_overview()` | Genome-wide stacked overview of multiplicon segments |
 
 ## License
 
