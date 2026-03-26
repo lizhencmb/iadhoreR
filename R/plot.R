@@ -210,6 +210,11 @@ plot_dotplot <- function(output_dir,
 #' @param real_only Logical. Use only real anchor points (default \code{TRUE}).
 #' @param band_alpha Numeric (0–1). Transparency of the anchor bands
 #'   (default \code{0.35}).
+#' @param show_gene_ids Logical. If \code{TRUE}, print gene IDs below each
+#'   arrow (rotated 90°). Useful for small multiplicons; can be crowded for
+#'   large ones (default \code{FALSE}).
+#' @param gene_id_cex Numeric. Character size for gene ID labels
+#'   (default \code{0.4}).
 #'
 #' @return Invisibly returns a list with elements \code{segments},
 #'   \code{list_elements}, and \code{anchorpoints}.
@@ -217,11 +222,14 @@ plot_dotplot <- function(output_dir,
 #' @examples
 #' \dontrun{
 #' plot_multiplicon("output/arath/", multiplicon_id = 1)
+#' plot_multiplicon("output/arath/", multiplicon_id = 1, show_gene_ids = TRUE)
 #' }
 plot_multiplicon <- function(output_dir,
                               multiplicon_id,
-                              real_only  = TRUE,
-                              band_alpha = 0.35) {
+                              real_only     = TRUE,
+                              band_alpha    = 0.35,
+                              show_gene_ids = FALSE,
+                              gene_id_cex   = 0.4) {
 
   dat  <- .load_iadhore(output_dir)
   segs <- dat$segments[dat$segments$multiplicon == multiplicon_id, ]
@@ -361,6 +369,11 @@ plot_multiplicon <- function(output_dir,
       graphics::polygon(px, py,
                         col    = cfill,
                         border = "grey30", lwd = 0.4)
+      if (show_gene_ids) {
+        graphics::text(xj, y - bh - 0.02, labels = ge$gene[j],
+                       srt = 90, adj = c(1, 0.5),
+                       cex = gene_id_cex, col = "grey20")
+      }
     }
 
     lbl <- paste0(segs$genome[i], "\n", segs$list[i])
@@ -492,12 +505,13 @@ plot_genome_overview <- function(output_dir,
     ifelse(seg_nr$level <= 4, "grey40",
            pal_high[as.character(seg_nr$multiplicon)])))
 
-  # Greedy interval stacking per chromosome
+  # Greedy interval stacking per chromosome.
+  # Sort by level first so level 2 fills the bottom stacks, then level 3, etc.
   seg_nr$.stack <- NA_integer_
   for (ch in chroms) {
     idx <- which(seg_nr$list == ch)
     if (length(idx) == 0L) next
-    ord <- order(seg_nr$first_coord[idx])
+    ord <- order(seg_nr$level[idx], seg_nr$first_coord[idx], na.last = TRUE)
     idx <- idx[ord]
     ends <- numeric(0)
     for (j in seq_along(idx)) {
