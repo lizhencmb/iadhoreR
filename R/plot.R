@@ -13,7 +13,7 @@
 #'   chromosome first), \code{"alpha"} (alphabetical), or \code{"natural"}
 #'   (sort by the numeric part of the name, e.g. chr1 < chr2 < chr10).
 #' @param real_only Logical.  If \code{TRUE} (default), only real anchorpoints
-#'   (\code{is_real_anchorpoint == 1}) are shown.
+#'   (\code{is_real_anchorpoint != 0}) are shown.
 #' @param colour_by Character, one of \code{"level"} (default),
 #'   \code{"multiplicon"}, or \code{"basecluster"}.  \code{"level"} colours
 #'   points by the multiplicon level using a sequential palette (light = low,
@@ -83,15 +83,15 @@ plot_dotplot <- function(output_dir,
   ap <- ap[!is.na(ap$genome_x) &
              ap$genome_x == genome_x & ap$genome_y == genome_y, , drop = FALSE]
 
-  if (real_only) ap <- ap[ap$is_real_anchorpoint == 1, , drop = FALSE]
+  if (real_only) ap <- ap[ap$is_real_anchorpoint != 0, , drop = FALSE]
 
   if (nrow(ap) == 0L) {
     n_ap   <- nrow(anchorpoints)
-    n_real <- sum(anchorpoints$is_real_anchorpoint == 1, na.rm = TRUE)
+    n_real <- sum(anchorpoints$is_real_anchorpoint != 0, na.rm = TRUE)
     if (n_ap == 0L) {
       message("No anchorpoints found in output (anchorpoints.txt is empty).")
     } else if (real_only && n_real == 0L) {
-      message("No real anchorpoints found (is_real_anchorpoint == 1 in 0 of ",
+      message("No real anchorpoints found (is_real_anchorpoint != 0 in 0 of ",
               n_ap, " rows). Try real_only = FALSE.")
     } else {
       message("No anchorpoints remain after filtering (total: ", n_ap,
@@ -180,24 +180,17 @@ plot_dotplot <- function(output_dir,
 
 #' Plot a single multiplicon collinear block
 #'
-#' Draws all segments of one multiplicon as horizontal tracks with gene boxes
-#' and anchor-point connections as diagonal lines, in the style of Fig. 1 /
-#' Fig. 3 of Simillion et al. (2002).
-#'
-#' The x-axis uses the profile position from \code{list_elements} (already
-#' gap-aligned across segments).  Filled boxes = forward-strand genes,
-#' open boxes = reverse-strand genes.  Anchor lines are coloured by
-#' orientation agreement between the two connected genes.
+#' Draws all segments of one multiplicon as horizontal gene tracks.  Each gene
+#' is shown as a filled (forward-strand) or open (reverse-strand) box.  Anchor
+#' point pairs are connected by coloured semi-transparent bands; all anchors
+#' belonging to the same basecluster share a colour.
 #'
 #' @param output_dir Path to the i-ADHoRe output directory, **or** a list
 #'   from \code{\link{read_iadhore_output}}.
 #' @param multiplicon_id Integer. The multiplicon to draw.
 #' @param real_only Logical. Use only real anchor points (default \code{TRUE}).
-#' @param col_same Colour for anchor lines where both genes share the same
-#'   strand orientation (default \code{"steelblue"}).
-#' @param col_opposite Colour for anchor lines where orientations differ
-#'   (default \code{"firebrick"}).
-#' @param lwd_ap Line width for anchor lines (default \code{1}).
+#' @param band_alpha Numeric (0–1). Transparency of the anchor bands
+#'   (default \code{0.35}).
 #'
 #' @return Invisibly returns a list with elements \code{segments},
 #'   \code{list_elements}, and \code{anchorpoints}.
@@ -208,92 +201,148 @@ plot_dotplot <- function(output_dir,
 #' }
 plot_multiplicon <- function(output_dir,
                               multiplicon_id,
-                              real_only    = TRUE,
-                              col_same     = "steelblue",
-                              col_opposite = "firebrick",
-                              lwd_ap       = 1) {
+                              real_only  = TRUE,
+                              band_alpha = 0.35) {
 
   dat  <- .load_iadhore(output_dir)
   segs <- dat$segments[dat$segments$multiplicon == multiplicon_id, ]
   if (nrow(segs) == 0L)
     stop("No segments found for multiplicon ", multiplicon_id)
   segs <- segs[order(segs$order), ]
+  segs$track <- seq_len(nrow(segs))   # convert 0-based order to 1-based track index
 
-  # Profile positions for genes in this multiplicon's segments
   le <- dat$list_elements[dat$list_elements$segment %in% segs$id, ]
-  le <- merge(le, segs[, c("id", "order", "genome", "list")],
+  le <- merge(le, segs[, c("id", "track", "genome", "list")],
               by.x = "segment", by.y = "id", sort = FALSE)
 
   ap <- dat$anchorpoints[dat$anchorpoints$multiplicon == multiplicon_id, ]
-  if (real_only) ap <- ap[ap$is_real_anchorpoint == 1, ]
+  if (real_only) ap <- ap[ap$is_real_anchorpoint != 0, ]
 
-  n_segs  <- nrow(segs)
-  x_range <- range(le$position, na.rm = TRUE)
-  pad     <- max(1L, diff(x_range) * 0.03)
-
+  n_segs     <- nrow(segs)
+  x_range    <- range(le$position, na.rm = TRUE)
+  pad        <- max(1L, diff(x_range) * 0.05)
   mult_level <- dat$multiplicons$level[dat$multiplicons$id == multiplicon_id]
 
-  old_par <- graphics::par(mar = c(3.5, 9, 2.5, 1))
+  # Collect anchor points from this multiplicon AND all ancestors so that
+  # homolog relationships at every level are represented
+  all_mult_ids <- multiplicon_id
+  mults        <- dat$multiplicons
+  cur_id       <- multiplicon_id
+  repeat {
+    parent_val <- mults$parent[mults$id == cur_id]
+    if (length(parent_val) == 0) break
+    parent_id  <- suppressWarnings(as.integer(trimws(parent_val)))
+    if (is.na(parent_id) || parent_id %in% all_mult_ids) break
+    all_mult_ids <- c(all_mult_ids, parent_id)
+    cur_id       <- parent_id
+  }
+  ap_all <- dat$anchorpoints[dat$anchorpoints$multiplicon %in% all_mult_ids, ]
+  if (real_only) ap_all <- ap_all[ap_all$is_real_anchorpoint != 0, ]
+
+  # Union-find: build connected components (homolog groups) across all levels
+  all_genes <- unique(c(ap_all$gene_x, ap_all$gene_y))
+  uf <- new.env(hash = TRUE, parent = emptyenv())
+  for (g in all_genes) uf[[g]] <- g
+
+  uf_find <- function(x) {
+    while (uf[[x]] != x) {
+      uf[[x]] <- uf[[uf[[x]]]]   # path compression
+      x <- uf[[x]]
+    }
+    x
+  }
+  for (k in seq_len(nrow(ap_all))) {
+    rx <- uf_find(ap_all$gene_x[k])
+    ry <- uf_find(ap_all$gene_y[k])
+    if (rx != ry) uf[[ry]] <- rx
+  }
+  for (g in all_genes) uf[[g]] <- uf_find(g)   # resolve all roots
+
+  roots      <- vapply(all_genes, function(g) uf[[g]], character(1))
+  uniq_roots <- unique(roots)
+  pal        <- .dotplot_palette(length(uniq_roots))
+  root_col   <- setNames(pal, uniq_roots)
+  gene_col   <- setNames(root_col[roots], all_genes)
+
+  bw <- 0.35; bh <- 0.18   # gene box half-width / half-height
+
+  old_par <- graphics::par(mar = c(1, 9, 3, 1))
   on.exit(graphics::par(old_par), add = TRUE)
 
   graphics::plot.new()
   graphics::plot.window(xlim = x_range + c(-pad, pad),
-                        ylim = c(0.4, n_segs + 0.6))
+                        ylim = c(0.5, n_segs + 0.5),
+                        xaxs = "i", yaxs = "i")
   graphics::title(
     main = sprintf("Multiplicon %d  (level %d, %d anchor points)",
-                   multiplicon_id, mult_level, nrow(ap)),
-    xlab = "Profile position",
+                   multiplicon_id, mult_level, nrow(ap_all)),
     cex.main = 0.9
   )
-  graphics::axis(1, cex.axis = 0.8)
 
+  # ── 1. Anchor bands (drawn first, behind gene boxes) ──────────────────────
+  # Use ap_all so parent-level homolog pairs are also drawn
+  for (k in seq_len(nrow(ap_all))) {
+    rx <- le[le$gene == ap_all$gene_x[k], ]
+    ry <- le[le$gene == ap_all$gene_y[k], ]
+    if (nrow(rx) == 0L || nrow(ry) == 0L) next
+
+    x1 <- rx$position[1]; y1 <- rx$track[1]
+    x2 <- ry$position[1]; y2 <- ry$track[1]
+
+    base_col  <- gene_col[ap_all$gene_x[k]]
+    fill_col  <- grDevices::adjustcolor(base_col, alpha.f = band_alpha)
+    edge_col  <- grDevices::adjustcolor(base_col, alpha.f = min(1, band_alpha + 0.3))
+
+    # Band edges: inner face of each gene box (facing the other track)
+    y1e <- if (y1 > y2) y1 - bh else y1 + bh
+    y2e <- if (y2 > y1) y2 - bh else y2 + bh
+
+    graphics::polygon(
+      x      = c(x1 - bw, x1 + bw, x2 + bw, x2 - bw),
+      y      = c(y1e,     y1e,     y2e,     y2e),
+      col    = fill_col,
+      border = edge_col,
+      lwd    = 0.6
+    )
+  }
+
+  # ── 2. Gene tracks (drawn on top of bands) ────────────────────────────────
   for (i in seq_len(n_segs)) {
-    y  <- segs$order[i]
+    y  <- segs$track[i]
     ge <- le[le$segment == segs$id[i], ]
     if (nrow(ge) == 0L) next
 
+    # Chromosome baseline
     x_lo <- min(ge$position, na.rm = TRUE)
     x_hi <- max(ge$position, na.rm = TRUE)
+    graphics::segments(x_lo, y, x_hi, y, lwd = 1.5, col = "grey50")
 
-    # Baseline
-    graphics::segments(x_lo, y, x_hi, y, lwd = 2.5, col = "black")
-
-    # Gene boxes: filled = "+", open = "-"
-    bw <- 0.35; bh <- 0.18
+    # Gene arrows: right-pointing = "+" (forward), left-pointing = "-" (reverse)
+    # Anchor genes share their basecluster colour; non-anchor genes are grey
     for (j in seq_len(nrow(ge))) {
       xj    <- ge$position[j]
-      cfill <- if (!is.na(ge$orientation[j]) && ge$orientation[j] == "-")
-                 "white" else "black"
-      graphics::rect(xj - bw, y - bh, xj + bw, y + bh,
-                     col = cfill, border = "black", lwd = 0.4)
+      rev   <- !is.na(ge$orientation[j]) && ge$orientation[j] == "-"
+      cfill <- gene_col[ge$gene[j]]
+      if (is.na(cfill)) cfill <- "grey80"
+      if (rev) {
+        px <- c(xj + bw,      xj - bw * 0.4, xj - bw, xj - bw * 0.4, xj + bw)
+      } else {
+        px <- c(xj - bw,      xj + bw * 0.4, xj + bw, xj + bw * 0.4, xj - bw)
+      }
+      py <- c(y - bh, y - bh, y, y + bh, y + bh)
+      graphics::polygon(px, py,
+                        col    = cfill,
+                        border = "grey30", lwd = 0.4)
     }
 
-    # Track label
     lbl <- paste0(segs$genome[i], "\n", segs$list[i])
     graphics::mtext(lbl, side = 2, at = y, las = 1, cex = 0.65, line = 0.5)
   }
 
-  # Anchor lines
-  for (k in seq_len(nrow(ap))) {
-    rx <- le[le$gene == ap$gene_x[k], ]
-    ry <- le[le$gene == ap$gene_y[k], ]
-    if (nrow(rx) == 0L || nrow(ry) == 0L) next
-    ox <- rx$orientation[1]; oy <- ry$orientation[1]
-    col_line <- if (!is.na(ox) && !is.na(oy) && ox != oy)
-                  col_opposite else col_same
-    graphics::segments(rx$position[1], rx$order[1],
-                       ry$position[1], ry$order[1],
-                       col = col_line, lwd = lwd_ap)
-  }
 
-  graphics::legend("topright",
-                   legend = c("same orientation", "opposite orientation"),
-                   col    = c(col_same, col_opposite),
-                   lwd    = 2, bty = "n", cex = 0.7)
-
-  invisible(list(segments     = segs,
-                 list_elements = le,
-                 anchorpoints  = ap))
+  invisible(list(segments      = segs,
+                 list_elements  = le,
+                 anchorpoints   = ap))
 }
 
 
