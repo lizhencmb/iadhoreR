@@ -136,8 +136,11 @@ plot_dotplot <- function(output_dir,
   if (colour_by == "level") {
     uniq_levels <- sort(unique(ap$level))
     n_lev       <- length(uniq_levels)
-    pal         <- grDevices::colorRampPalette(
-                     c("#c6dbef", "#084594"))(n_lev)   # light→dark blue
+    pal <- if (n_lev == 1L) {
+      "black"
+    } else {
+      grDevices::colorRampPalette(c("#4292c6", "#08306b"))(n_lev)  # dark blue range
+    }
     ap$.col     <- pal[match(ap$level, uniq_levels)]
   } else {
     colour_ids <- ap[[colour_by]]
