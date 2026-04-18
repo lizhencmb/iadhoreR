@@ -69,9 +69,14 @@ conda install -c lizhencmb -c bioconda -c conda-forge i-adhore diamond mcl
 With the conda environment active, open R and run:
 
 ```r
-install.packages("remotes")
+install.packages(c("remotes", "knitr", "rmarkdown"))
 remotes::install_github("lizhencmb/iadhoreR", build_vignettes = TRUE)
 ```
+
+> **Note:** `knitr`, `rmarkdown`, and [Pandoc](https://pandoc.org) are required
+> to build the vignettes. Pandoc is included in the conda environment created
+> in Step 3. If you skip `build_vignettes = TRUE` (or set it to `FALSE`), none
+> of these are needed.
 
 ### Step 5 — Verify
 
@@ -120,9 +125,11 @@ environment inside Windows and is fully supported.
    conda install -c conda-forge r-base
    ```
 
+   This also installs **Pandoc**, which is needed to build the vignettes.
+
 4. Inside WSL2 R, install iadhoreR:
    ```r
-   install.packages("remotes")
+   install.packages(c("remotes", "knitr", "rmarkdown"))
    remotes::install_github("lizhencmb/iadhoreR", build_vignettes = TRUE)
    ```
 

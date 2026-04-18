@@ -8,3 +8,4 @@ dependencies:
   - i-adhore
   - diamond>=2.0
   - mcl
+  - pandoc
