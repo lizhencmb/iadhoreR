@@ -9,3 +9,6 @@ iadhore_test/
 vvi_lists/
 test_output/
 test_vvi.R
+*.pdf
+inst/extdata/*.gff3
+inst/extdata/*.fasta
