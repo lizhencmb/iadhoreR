@@ -1,0 +1,193 @@
+---
+title: "Preparing i-ADHoRe input from GFF/GTF files"
+author: "iadhoreR"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    theme: readable
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", message = FALSE)
+
+# Work whether the package is installed or we are knitting from the source repo.
+if (requireNamespace("iadhoreR", quietly = TRUE) &&
+    nzchar(system.file("extdata", package = "iadhoreR"))) {
+  library(iadhoreR)
+} else {
+  devtools::load_all(".")
+}
+
+# Locate a bundled example file (installed package, or inst/extdata in the repo).
+ex <- function(f) {
+  p <- system.file("extdata", f, package = "iadhoreR")
+  if (nzchar(p)) p else file.path("inst", "extdata", f)
+}
+```
+
+## What this shows
+
+To run i-ADHoRe you need, per genome, one **gene list** file per chromosome:
+a position-ordered list of gene identifiers, each tagged with its strand
+(`AT1G01010+`). Those identifiers must match the IDs used in your BLAST/DIAMOND
+homology table — which usually means matching the headers of the protein FASTA
+the homology search was built from.
+
+Real annotation files make this awkward: the gene ID you need can live under
+any GFF attribute key (`ID`, `Name`, `protein_id`, `Source_ID`, …), feature
+types like `CDS` repeat each gene over many rows, and some features carry no
+strand. This document walks through the three helpers that handle all of that:
+
+1. `inspect_gff()` — survey feature types and attribute keys.
+2. `recommend_parse_gff()` — pick the right `feature_type` / `id_attribute` by
+   matching against a proteome.
+3. `parse_gff()` — write the per-chromosome gene lists.
+
+The examples use the small genome subsets bundled with the package.
+
+## 1. Inspecting a GFF
+
+`inspect_gff()` reports which feature types exist and which attribute keys each
+one carries, with example IDs — so you can see what you have before committing
+to any parameters.
+
+```{r inspect}
+ath_gff <- ex("annotation.selected_transcript.all_features.ath.gff3")
+info <- inspect_gff(ath_gff)
+```
+
+The `mRNA` rows carry an `ID` like `AT1G01010.1`, which is exactly how the
+*Arabidopsis* proteome headers are written.
+
+## 2. Matching a GFF to a proteome
+
+You rarely have to guess the parameters. `recommend_parse_gff()` tries **every**
+feature-type / attribute-key combination present in the file and reports the one
+whose IDs best overlap your protein FASTA.
+
+```{r recommend-ath}
+ath_pep <- ex("proteome.selected_transcript.ath.fasta")
+rec_ath <- recommend_parse_gff(ath_gff, ath_pep)
+```
+
+Here it lands on `feature_type = "mRNA"`, `id_attribute = "ID"` — the
+transcript-level identifiers.
+
+The right answer depends on how the proteome was keyed, not on a fixed
+convention. The bundled *Aristolochia fimbriata* proteome uses **gene-level**
+IDs (`>Af01G000001`), so the same function recommends a different feature type
+for it:
+
+```{r recommend-aristolochia}
+afi_gff <- ex("Aristolochia_fimbriata.gff")
+afi_pep <- ex("Aristolochia_fimbriata.fasta")
+rec_afi <- recommend_parse_gff(afi_gff, afi_pep)
+rec_afi[c("feature_type", "id_attribute", "n_fasta", "n_matched")]
+```
+
+Because the recommendation considers **all** attribute keys (not a hardcoded
+short list), it also handles annotations that stash the matching ID in
+non-standard places. The small synthetic GFF below keeps the FASTA IDs under a
+`protein_id` key on `CDS` rows — a layout that defeats a fixed `ID`/`Name`
+search but is found here automatically:
+
+```{r recommend-nonstandard}
+gff_lines <- c(
+  "##gff-version 3",
+  "chr1\tsrc\tgene\t100\t900\t.\t+\t.\tID=gene:G1",
+  "chr1\tsrc\tCDS\t100\t300\t.\t+\t0\tID=c1;Parent=gene:G1;protein_id=PROT1",
+  "chr1\tsrc\tCDS\t400\t900\t.\t+\t1\tID=c1;Parent=gene:G1;protein_id=PROT1",
+  "chr1\tsrc\tgene\t2000\t2500\t.\t-\t.\tID=gene:G2",
+  "chr1\tsrc\tCDS\t2000\t2500\t.\t-\t0\tID=c2;Parent=gene:G2;protein_id=PROT2"
+)
+tmp_gff <- tempfile(fileext = ".gff");  writeLines(gff_lines, tmp_gff)
+tmp_pep <- tempfile(fileext = ".pep");  writeLines(c(">PROT1", "MAAA",
+                                                     ">PROT2", "MBBB"), tmp_pep)
+
+rec_ns <- recommend_parse_gff(tmp_gff, tmp_pep)
+rec_ns[c("feature_type", "id_attribute", "n_matched")]
+```
+
+## 3. Writing the gene lists
+
+Feed the recommended parameters into `parse_gff()`. It writes one `.lst` file
+per chromosome and returns a named vector you can pass straight to
+`write_iadhore_config()`.
+
+```{r parse}
+out_dir <- file.path(tempdir(), "ath_lists")
+ath_lists <- parse_gff(
+  ath_gff,
+  output_dir   = out_dir,
+  genome_name  = "ath",
+  feature_type = rec_ath$feature_type,
+  id_attribute = rec_ath$id_attribute,
+  chromosomes  = rec_ath$chromosomes
+)
+
+length(ath_lists)            # one file per chromosome
+head(ath_lists, 2)
+# first few genes of the first chromosome, in position order with strand tags
+head(readLines(ath_lists[[1]]), 5)
+```
+
+`parse_gff()` quietly does two things that matter on real data:
+
+- **One entry per gene.** When the chosen feature type repeats a gene across
+  rows (typical for `CDS` or `exon`), only the first occurrence — at the gene's
+  lowest coordinate — is kept, so the list isn't padded with duplicates.
+- **Strand-safe.** Features whose strand is `.` (unknown) can't be oriented in a
+  gene list, so they are dropped with a warning rather than aborting the run.
+
+Both are visible on the synthetic `CDS` example from above: two `CDS` rows for
+`PROT1` collapse to a single ordered entry.
+
+```{r parse-cds}
+cds_dir <- file.path(tempdir(), "cds_lists")
+cds_lists <- parse_gff(tmp_gff, output_dir = cds_dir, genome_name = "demo",
+                       feature_type = "CDS", id_attribute = "protein_id")
+readLines(cds_lists[["chr1"]])
+```
+
+## 4. When the IDs genuinely don't line up
+
+Sometimes a proteome and an annotation simply use different identifier systems —
+e.g. FASTA headers like `jgi|Chlin1|10000|g5205.t1` whose gene-model name never
+appears in the GFF. Rather than silently matching a handful of genes,
+`recommend_parse_gff()` stops and tells you *where* the IDs do correspond, so you
+can reconcile them before going further.
+
+```{r mismatch, error=TRUE}
+# Same GFF as above, but a proteome whose primary IDs (SEQ_*) are not stored in
+# the GFF; the real link is the second header field, which matches protein_id.
+mismatch_pep <- tempfile(fileext = ".pep")
+writeLines(c(">SEQ_0001 PROT1", "MAAA",
+             ">SEQ_0002 PROT2", "MBBB"), mismatch_pep)
+
+recommend_parse_gff(tmp_gff, mismatch_pep)
+```
+
+The message names the attribute (`protein_id`) that matches a FASTA header
+sub-field, which tells you the fix: rename the FASTA headers, or rebuild the
+homology table using the same IDs the GFF stores.
+
+## Next step
+
+Once every genome has its gene lists, assemble the run configuration:
+
+```{r config, eval=FALSE}
+write_iadhore_config(
+  genomes     = list(ath = ath_lists, afi = afi_lists),
+  blast_table = "blast_table.txt",
+  output_path = "iadhore_out",
+  file        = "iadhore.ini"
+)
+```
+
+See the *Getting Started with iadhoreR* tutorial for the full collinearity
+workflow from here.
+```{r cleanup, include=FALSE}
+unlink(c(out_dir, cds_dir), recursive = TRUE)
+```

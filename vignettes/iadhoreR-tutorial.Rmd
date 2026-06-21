@@ -1,6 +1,9 @@
 ---
 title: "Getting Started with iadhoreR"
-output: rmarkdown::html_vignette
+output:
+  rmarkdown::html_vignette:
+    toc: true
+    toc_depth: 3
 vignette: >
   %\VignetteIndexEntry{Getting Started with iadhoreR}
   %\VignetteEngine{knitr::rmarkdown}
@@ -20,13 +23,20 @@ questions like:
 
 - Which chromosomal regions in species A are syntenic with regions in species B?
 - Which genomic segments are remnants of ancient whole-genome duplications?
+- Which segments descend from the same ancestral chromosome (putative ancestral
+  regions, PARs)?
+
+The package wraps the i-ADHoRe binary and the upstream tools it needs (DIAMOND
+for homology search, MCL for gene-family clustering), and adds R helpers for
+**preparing inputs**, **parsing every output table**, and **computing statistics
+and plots** from the results.
 
 This tutorial walks through a complete analysis using two bundled example
-species (Chr1 subsets included in the package; use your own full genomes for
-real analyses):
+species (chromosome subsets included in the package; use your own full genomes
+for real analyses):
 
-- **ath** — *Arabidopsis thaliana* (Chr1: ~7,150 proteins)
-- **vvi** — *Vitis vinifera* (chr1: ~1,400 proteins)
+- **ath** — *Arabidopsis thaliana*
+- **vvi** — *Vitis vinifera*
 
 The typical workflow has five stages:
 
@@ -45,8 +55,15 @@ parse_gff()   run_diamond()    write_iadhore_config()
               run_iadhore()
                     │
                     ▼
-          read_iadhore_output()
+          read_iadhore_output()  ──►  iadhore_summary(), find_pars(),
+                                       plot_dotplot(), plot_genome_overview(),
+                                       plot_multiplicon(), plot_par()
 ```
+
+> Most code chunks below are shown for reference and are **not executed** when
+> this vignette is built (they need the external binaries and full genomes).
+> The input-preparation and output-parsing helpers, however, run on any machine
+> with the package installed.
 
 ---
 
@@ -77,8 +94,12 @@ remotes::install_github("lizhencmb/iadhoreR", build_vignettes = TRUE)
 
 ### Verify the setup
 
+`check_tools()` reports whether each external binary can be found. If anything
+is missing, `setup_instructions()` prints how to install it.
+
 ```{r eval=FALSE}
 library(iadhoreR)
+
 check_tools()
 #> External tool status:
 #>   i-adhore     [OK]     /opt/conda/envs/iadhoreR/bin/i-adhore
@@ -87,100 +108,108 @@ check_tools()
 #>   mcxload      [OK]     /opt/conda/envs/iadhoreR/bin/mcxload
 #>   mcxdump      [OK]     /opt/conda/envs/iadhoreR/bin/mcxdump
 #> All tools found. You are ready to use iadhoreR.
+
+setup_instructions()   # printed only when a tool is missing
+```
+
+The bundled example files used throughout this tutorial are located with
+`system.file()`:
+
+```{r eval=FALSE}
+ath_gff   <- system.file("extdata", "annotation.selected_transcript.all_features.ath.gff3",
+                         package = "iadhoreR")
+vvi_gff   <- system.file("extdata", "annotation.selected_transcript.all_features.vvi.gff3",
+                         package = "iadhoreR")
+ath_fasta <- system.file("extdata", "proteome.selected_transcript.ath.fasta",
+                         package = "iadhoreR")
+vvi_fasta <- system.file("extdata", "proteome.selected_transcript.vvi.fasta",
+                         package = "iadhoreR")
+
+work <- "iadhore_ath_vvi"   # working directory for all outputs
 ```
 
 ---
 
-## Tutorial: *Arabidopsis* vs *Vitis* synteny
+## Stage 1 — Prepare the gene lists
 
-```{r eval=FALSE}
+i-ADHoRe requires, for each genome, one plain-text file per chromosome listing
+gene IDs in genomic order with a strand tag (`AT1G01010+`). Those IDs must match
+the IDs in your homology table, which in turn come from your protein FASTA. The
+three helpers below take you from a raw GFF/GTF to those gene lists.
+
+### 1a. Inspect a GFF — `inspect_gff()`
+
+Before parsing, survey what feature types and attribute keys an annotation
+contains. This runs live on the bundled file:
+
+```{r}
 library(iadhoreR)
+ath_gff <- system.file("extdata",
+  "annotation.selected_transcript.all_features.ath.gff3", package = "iadhoreR")
 
-# All input files are bundled with the package
-ath_gff   <- system.file("extdata", "annotation.selected_transcript.all_features.ath.gff3",
-                          package = "iadhoreR")
-vvi_gff   <- system.file("extdata", "annotation.selected_transcript.all_features.vvi.gff3",
-                          package = "iadhoreR")
+info <- inspect_gff(ath_gff)
+```
+
+The `mRNA` rows carry an `ID` like `AT1G01010.1` — exactly how the *Arabidopsis*
+proteome headers are written — so `feature_type = "mRNA"`, `id_attribute = "ID"`.
+
+### 1b. Match a GFF to a proteome — `recommend_parse_gff()`
+
+You rarely have to choose those parameters by hand. `recommend_parse_gff()`
+tries **every** feature-type / attribute-key combination present in the file and
+reports the one whose IDs best overlap your protein FASTA:
+
+```{r}
 ath_fasta <- system.file("extdata", "proteome.selected_transcript.ath.fasta",
-                          package = "iadhoreR")
-vvi_fasta <- system.file("extdata", "proteome.selected_transcript.vvi.fasta",
-                          package = "iadhoreR")
-
-# Working directory for all outputs
-work <- "iadhore_ath_vvi"
-```
-
-### Step 1 — Inspect the GFF files
-
-Before parsing, use `inspect_gff()` to identify the correct feature type and
-attribute key for your annotation files. This is especially useful when working
-with a new GFF file you haven't seen before.
-
-```{r eval=FALSE}
-inspect_gff(ath_gff)
-#> Feature types:
-#>    exon     CDS    gene    mRNA  ...
-#>
-#> Format detected: GFF3
-#>
-#> Attribute keys per feature type:
-#>   [mRNA]
-#>   All keys: ID, Parent, Name, gene_id
-#>   ID  e.g.: AT1G01010.1, AT1G01020.5, AT1G01030.1
-```
-
-The key information: use `feature_type = "mRNA"` and `id_attribute = "ID"`.
-
-If you also have a FASTA file, `recommend_parse_gff()` goes further and
-automatically finds the combination whose IDs best match the protein sequences:
-
-```{r eval=FALSE}
+                         package = "iadhoreR")
 rec <- recommend_parse_gff(ath_gff, ath_fasta)
-#> FASTA: 48310 sequences
-#>   e.g.: AT1G01010.1, AT1G01020.5, AT1G01030.1
-#>
-#> Best match: feature_type = "mRNA", id_attribute = "ID"
-#>   GFF unique IDs : 27655
-#>   FASTA          : 48310
-#>   Matched        : 27655
-#>   Chromosomes with matched genes (7): Chr1, Chr2, Chr3, Chr4, Chr5, ChrC, ChrM
 ```
 
-> **Note:** The FASTA here contains all transcript isoforms (48,310), while the
-> GFF uses one selected transcript per gene (27,655). `recommend_parse_gff()`
-> automatically identifies the correct IDs to use.
+```{r}
+rec[c("feature_type", "id_attribute", "n_matched")]
+```
 
-### Step 2 — Parse GFF files into gene list files
+Two things make this robust on real-world annotations:
 
-i-ADHoRe requires one plain-text file per chromosome, listing gene IDs in
-genomic order with their strand orientation. `parse_gff()` creates these files
-from a GFF.
+- **All attribute keys are considered**, not a fixed shortlist. The matching ID
+  often lives under a non-standard key — `protein_id` (Ensembl-style),
+  `Source_ID`, `proteinId`/`transcriptId` (JGI-style) — and those are found
+  automatically.
+- **When the FASTA IDs genuinely don't match any attribute**, the function stops
+  with an actionable message naming the attribute that corresponds to a FASTA
+  header *sub-field*, instead of silently matching a handful of genes. That tells
+  you exactly what to reconcile (rename FASTA headers, or rebuild the homology
+  table with the GFF's IDs).
+
+The right answer depends on how the proteome was keyed, not on a fixed
+convention: the same call on a proteome that uses gene-level IDs would instead
+recommend `feature_type = "gene"`.
+
+### 1c. Write the gene lists — `parse_gff()`
+
+Feed the recommended parameters in. `parse_gff()` writes one `.lst` file per
+chromosome and returns a named vector mapping chromosome → file path, ready for
+`write_iadhore_config()`.
 
 ```{r eval=FALSE}
-# Arabidopsis: bundled data contains Chr1 only
-# For a full analysis use all nuclear chromosomes:
-#   chromosomes = c("Chr1", "Chr2", "Chr3", "Chr4", "Chr5")
 ath_lists <- parse_gff(
   ath_gff,
   output_dir   = file.path(work, "ath_lists"),
   genome_name  = "ath",
-  feature_type = "mRNA",
-  id_attribute = "ID",
-  chromosomes  = "Chr1"
+  feature_type = rec$feature_type,   # "mRNA"
+  id_attribute = rec$id_attribute,   # "ID"
+  chromosomes  = c("Chr1", "Chr2", "Chr3", "Chr4", "Chr5")
 )
-#> Wrote 1 gene list files to iadhore_ath_vvi/ath_lists
+#> Wrote 5 gene list files to iadhore_ath_vvi/ath_lists
 
-# Vitis: bundled data contains chr1 only
-# For a full analysis use: chromosomes = paste0("chr", 1:19)
 vvi_lists <- parse_gff(
   vvi_gff,
   output_dir   = file.path(work, "vvi_lists"),
   genome_name  = "vvi",
   feature_type = "mRNA",
   id_attribute = "ID",
-  chromosomes  = "chr1"
+  chromosomes  = paste0("chr", 1:19)
 )
-#> Wrote 1 gene list files to iadhore_ath_vvi/vvi_lists
 ```
 
 Each list file looks like:
@@ -192,23 +221,49 @@ AT1G01030.1+
 ...
 ```
 
-The returned named vectors map chromosome IDs to file paths and are passed
-directly to `write_iadhore_config()`.
+`parse_gff()` also handles two things that trip up naive parsing of real files:
 
-### Step 3 — All-vs-all protein similarity search
+- **One entry per gene.** When the chosen feature type repeats a gene across
+  rows (typical for `CDS` or `exon`), only the first occurrence at the gene's
+  lowest coordinate is kept — the list is not padded with duplicates.
+- **Strand-safe.** Features whose strand is `.` (unknown) cannot be oriented in
+  a gene list, so they are dropped with a warning rather than aborting the run.
 
-i-ADHoRe needs to know which genes are homologous across and within genomes.
-We use DIAMOND to run a fast all-vs-all blastp search. Passing both FASTAs
-together produces cross-species hits alongside self-hits in a single run.
+### 1d. Writing gene lists manually — `write_gene_list()`
+
+If your coordinates are already in R (e.g. from a database query), build the
+lists directly:
+
+```{r eval=FALSE}
+write_gene_list(
+  gene_ids = c("gene001", "gene002", "gene003"),
+  strand   = c("+", "-", "+"),
+  file     = "chr1.lst"
+)
+```
+
+---
+
+## Stage 2 — Build the homology table
+
+i-ADHoRe needs to know which genes are homologous, supplied either as a
+two-column **gene-pair** table (`table_type = "pairs"`) or a two-column
+**gene-to-family** table (`table_type = "family"`).
+
+### 2a. All-vs-all similarity search — `run_diamond()`
+
+Pass both FASTAs together to get cross-species and within-species hits in one
+run.
 
 ```{r eval=FALSE}
 run_diamond(
-  fasta_file  = c(ath_fasta, vvi_fasta),
-  output_file = file.path(work, "all_vs_all.blast"),
-  work_dir    = file.path(work, "diamond"),
-  evalue      = 1e-5,
-  threads     = 8,
-  verbose     = FALSE
+  fasta_file     = c(ath_fasta, vvi_fasta),
+  output_file    = file.path(work, "all_vs_all.blast"),
+  work_dir       = file.path(work, "diamond"),
+  evalue         = 1e-5,
+  threads        = 8,
+  more_sensitive = FALSE,
+  verbose        = FALSE
 )
 #> Combining 2 FASTA files...
 #> Building DIAMOND database...
@@ -216,16 +271,30 @@ run_diamond(
 #> DIAMOND search complete: iadhore_ath_vvi/all_vs_all.blast
 ```
 
-### Step 4 — Cluster homologs into gene families with MCL
+### 2b. Option A — gene pairs with `parse_blast()`
 
-i-ADHoRe's `table_type=family` mode expects a two-column gene-to-family table.
-`blast_to_families()` handles the full MCL pipeline: filtering BLAST hits,
-building the graph with `mcxload`, clustering with `mcl`, and exporting with
-`mcxdump`.
+The simplest table: filter the DIAMOND hits and write the surviving query/subject
+pairs. i-ADHoRe adds the reciprocal pair automatically.
 
-The `gene_list_files` argument is important: any gene present in the lists but
-absent from BLAST hits (no detectable homolog) is assigned its own singleton
-family, ensuring every gene has a family ID.
+```{r eval=FALSE}
+parse_blast(
+  blast_file    = file.path(work, "all_vs_all.blast"),
+  output_file   = file.path(work, "blast_pairs.txt"),
+  evalue_cutoff = 1e-5,
+  min_pident    = 30      # optional percent-identity floor
+)
+#> Wrote 1843211 gene pairs to iadhore_ath_vvi/blast_pairs.txt
+```
+
+### 2c. Option B — gene families with `blast_to_families()`
+
+For `table_type = "family"` mode, cluster homologs with MCL.
+`blast_to_families()` runs the full pipeline: filter hits, build the graph with
+`mcxload`, cluster with `mcl`, export with `mcxdump`.
+
+The `gene_list_files` argument matters: any gene present in the lists but absent
+from BLAST hits is given its own singleton family, so **every** gene has a family
+ID.
 
 ```{r eval=FALSE}
 blast_to_families(
@@ -237,22 +306,18 @@ blast_to_families(
   evalue_cutoff   = 1e-5
 )
 #> Preparing ABC input from BLAST results...
-#>   1842301 pairs written
-#> Running mcxload...
-#> Running MCL (inflation = 3)...
-#> Running mcxdump...
-#> Writing gene-to-family table...
+#> Running mcxload / MCL (inflation = 3) / mcxdump...
 #>   Added 8432 singleton families
 #> Done: 54001 genes in 21876 families -> iadhore_ath_vvi/families.txt
 ```
 
-The output file has two tab-separated columns — no header:
+The output has two tab-separated columns, no header:
 
 ```
-AT1G01010.1    FAM000001
-AT1G01020.5    FAM000001
+AT1G01010.1          FAM000001
+AT1G01020.5          FAM000001
 GSVIVT01000042001    FAM000001
-AT1G01030.1    FAM000002
+AT1G01030.1          FAM000002
 ...
 ```
 
@@ -264,31 +329,35 @@ AT1G01030.1    FAM000002
 | 2.0 – 3.0 | Balanced — good default for most analyses |
 | 3.0 – 5.0 | Smaller, tighter families (stricter ortholog grouping) |
 
-For synteny detection, values between 2.0 and 3.0 work well for most plant
-genomes.
+For synteny detection, 2.0–3.0 works well for most plant genomes.
 
-### Step 5 — Write the i-ADHoRe configuration file
+---
+
+## Stage 3 — Configure and run i-ADHoRe
+
+### 3a. Write the configuration — `write_iadhore_config()`
 
 ```{r eval=FALSE}
 write_iadhore_config(
   genomes       = list(ath = ath_lists, vvi = vvi_lists),
   blast_table   = file.path(work, "families.txt"),
-  table_type    = "family",
+  table_type    = "family",                       # or "pairs"
   output_path   = file.path(work, "iadhore_output"),
   file          = file.path(work, "config.ini"),
 
   # clustering parameters
-  gap_size      = 30,   # max distance between genes in a colinear segment
-  cluster_gap   = 35,   # max distance between segments to be grouped
-  anchor_points = 3,    # min homologous gene pairs per segment
-  q_value       = 0.75, # min linearity (R²) of a cluster
+  cluster_type  = "colinear",
+  gap_size      = 30,    # max distance between genes in a colinear segment
+  cluster_gap   = 35,    # max distance between segments to be grouped
+  anchor_points = 3,     # min homologous gene pairs per segment
+  q_value       = 0.75,  # min linearity (R²) of a cluster
   prob_cutoff   = 0.001,
 
   number_of_threads = 8
 )
 ```
 
-#### Key parameters explained
+#### Key parameters
 
 | Parameter | What it controls | Typical range |
 |-----------|-----------------|---------------|
@@ -297,18 +366,37 @@ write_iadhore_config(
 | `anchor_points` | Min anchor points for a valid segment | 3 – 6 |
 | `q_value` | Minimum R² (linearity) of a cluster | 0.70 – 0.90 |
 | `prob_cutoff` | Max probability of a cluster arising by chance | 0.001 – 0.01 |
+| `multiple_hypothesis_correction` | `"FDR"`, `"bonferroni"`, or `"none"` | `"FDR"` |
+| `level_2_only` | Restrict to pairwise (level-2) multiplicons | `FALSE` |
 
 Increase `anchor_points` and decrease `prob_cutoff` for stricter, higher-confidence
 results. For whole-genome duplication studies, `anchor_points = 5` with
 `gap_size = 30` is a common starting point.
 
-### Step 6 — Run i-ADHoRe
+#### Cloud and hybrid modes
+
+`cluster_type` also accepts `"cloud"` (degraded/diffuse homology) and `"hybrid"`
+(colinear + cloud). These add their own parameters and produce two extra output
+tables (see Stage 4):
 
 ```{r eval=FALSE}
-run_iadhore(
-  config_file = file.path(work, "config.ini"),
-  verbose     = TRUE
+write_iadhore_config(
+  genomes      = list(ath = ath_lists, vvi = vvi_lists),
+  blast_table  = file.path(work, "families.txt"),
+  table_type   = "family",
+  output_path  = file.path(work, "iadhore_cloud"),
+  file         = file.path(work, "config_cloud.ini"),
+  cluster_type = "hybrid",
+  cloud_gap_size      = 20,
+  cloud_cluster_gap   = 25,
+  cloud_filter_method = "binomial"
 )
+```
+
+### 3b. Run it — `run_iadhore()`
+
+```{r eval=FALSE}
+run_iadhore(config_file = file.path(work, "config.ini"), verbose = TRUE)
 #> i-ADHoRe 3.0 starting...
 #> ...
 #> i-ADHoRe finished.
@@ -318,368 +406,259 @@ run_iadhore(
 > writing all output. iadhoreR converts this to a warning rather than an error,
 > since the output files are complete.
 
-### Step 7 — Read and explore the results
+---
+
+## Stage 4 — Read the output
+
+### `read_iadhore_output()` — everything at once
 
 ```{r eval=FALSE}
 results <- read_iadhore_output(file.path(work, "iadhore_output"))
 names(results)
 #> [1] "multiplicons"  "baseclusters"  "anchorpoints"  "segments"
 #> [5] "genes"         "list_elements"
+#> # plus "clouds" and "cloud_anchorpoints" for cloud/hybrid runs
 ```
 
-#### Multiplicons
+Each element is a data frame. You can also read any single table on its own with
+the matching `read_*()` function:
 
-The top-level syntenic regions. Each row is a pair of syntenic segments between
-two genomic locations (`genome_x`/`list_x` vs `genome_y`/`list_y`).
+| Function | Table | Key columns |
+|----------|-------|-------------|
+| `read_multiplicons()` | Syntenic region pairs | `id`, `level`, `number_of_anchorpoints`, `is_redundant` |
+| `read_baseclusters()` | Diagonals within multiplicons | `id`, `multiplicon`, `orientation` |
+| `read_anchorpoints()` | Homologous gene pairs | `gene_x`, `gene_y`, `is_real_anchorpoint` |
+| `read_segments()` | Segment boundaries | `genome`, `list`, `first`, `last` |
+| `read_genes()` | All genes with remapped coordinates | `genome`, `list`, `coordinate`, `orientation` |
+| `read_list_elements()` | Gene ↔ segment membership | `segment`, `gene`, `position` |
+| `read_clouds()` | Cloud regions (cloud/hybrid) | `cloud_density`, `dim_x`, `dim_y` |
+| `read_cloud_anchorpoints()` | Cloud anchor pairs (cloud/hybrid) | `CloudID`, `gene_x`, `gene_y` |
 
 ```{r eval=FALSE}
+# the multiplicons table: each row is a pair of syntenic segments
 head(results$multiplicons)
-#>   id genome_x list_x parent genome_y list_y level number_of_anchorpoints
-#> 1  1      ath   Chr1     NA      ath   Chr1     2                      5
-#> 2  2      ath   Chr1     NA      ath   Chr2     2                      4
-#> ...
-#>   profile_length begin_x end_x begin_y end_y is_redundant
-```
+#>   id genome_x list_x parent genome_y list_y level number_of_anchorpoints ...
+#> 1  1      ath   Chr1     NA      ath   Chr1     2                      5 ...
 
-Key columns:
-- `level` — multiplicon level; level 2 = pairwise, higher = profile-based
-- `number_of_anchorpoints` — number of homologous gene pairs anchoring this region
-- `is_redundant` — if TRUE, this region is a subset of a higher-level multiplicon
-
-Count syntenic regions by species pair:
-
-```{r eval=FALSE}
+# count syntenic regions per species pair
 table(paste(results$multiplicons$genome_x, "vs", results$multiplicons$genome_y))
-```
 
-#### Anchor points
-
-The individual homologous gene pairs that define each syntenic region.
-
-```{r eval=FALSE}
-head(results$anchorpoints)
-#>   id multiplicon basecluster   gene_x            gene_y coord_x coord_y
-#> 1  1           1           1 AT1G01010.1 GSVIVT01000001001       1       1
-#> ...
-#>   is_real_anchorpoint
-```
-
-To get all anchor gene pairs for a specific multiplicon:
-
-```{r eval=FALSE}
-mp_id <- 1
-ap <- results$anchorpoints[results$anchorpoints$multiplicon == mp_id, ]
-ap[, c("gene_x", "gene_y")]
-```
-
-#### Segments
-
-The genomic boundaries of each syntenic segment.
-
-```{r eval=FALSE}
-head(results$segments)
-#>   id multiplicon genome list first last order
-#> 1  1           1    ath Chr1    10   45     1
-#> 2  2           1    vvi chr1     3   31     2
-```
-
-#### Putting it together: genes in syntenic regions
-
-To find all genes involved in any syntenic region:
-
-```{r eval=FALSE}
-# Gene IDs from anchor points
+# all genes that anchor any syntenic region
 syntenic_genes <- unique(c(results$anchorpoints$gene_x,
                            results$anchorpoints$gene_y))
-length(syntenic_genes)
 ```
 
 ---
 
-### Step 8 — Summary statistics
+## Stage 5 — Statistics and downstream analysis
 
-`iadhore_summary()` prints a quick overview combining colinearity and
-duplication information:
+### Quick overview — `iadhore_summary()`
 
 ```{r eval=FALSE}
 iadhore_summary(results)
 #> === i-ADHoRe run summary ===
-#>
 #>   Total multiplicons     : 1482
 #>   Non-redundant          : 1104
 #>   Maximum level          : 5
 #>
 #> --- Colinear portions (genome level) ---
-#>
 #>   ath vs vvi : 31.42%
 #>   vvi vs ath : 28.17%
 #>
 #> --- Duplicated portions (genome level) ---
-#>
 #>   ath : 47.31% duplicated
 #>   vvi : 52.88% duplicated
 ```
 
-The two underlying data frames are available separately if you need per-chromosome
-detail:
+### Per-chromosome detail
 
 ```{r eval=FALSE}
 # Colinear portions: one row per (genome, chromosome, other_genome)
 cp <- colinear_portions(results)
 head(cp)
 #>   genome  list list_size other_genome colinear_count colinear_pct
-#> 1    ath Chr1      7152          vvi           2301       32.17
-
-# Genome-level roll-up
-aggregate(cbind(colinear_count, list_size) ~ genome + other_genome,
-          data = cp, FUN = sum)
+#> 1    ath  Chr1      7152          vvi           2301         32.17
 
 # Duplicated portions: one row per (genome, chromosome, level)
 mp <- multiplicated_portions(results)
 head(mp)
 #>   genome  list list_size level count   pct
-#> 1    ath Chr1      7152     1  3891 54.41
-#> 2    ath Chr1      7152     2  2651 37.07
-#> 3    ath Chr1      7152     3   610  8.53
-
-# Fraction of each genome covered at level >= 2
-dup     <- mp[mp$level >= 2, ]
-tot_cnt <- aggregate(count ~ genome, data = mp,  FUN = sum)
-dup_cnt <- aggregate(count ~ genome, data = dup, FUN = sum)
-merge(tot_cnt, dup_cnt, by = "genome", suffixes = c("_total", "_dup"))
+#> 1    ath  Chr1      7152     2  2651  37.07
 ```
 
----
+### Transitive homolog groups — `homolog_groups()`
 
-### Step 9 — Homologous gene groups
-
-`homolog_groups()` runs a union-find algorithm over all anchor pairs in all
-multiplicons, grouping transitively homologous genes into discrete sets.  It
-uses the full anchor point table (all levels), so if gene A pairs with B in a
-level-2 multiplicon and B pairs with C in a level-3 multiplicon, all three end
-up in the same group.
+Runs a union-find over all anchor pairs (all levels), grouping transitively
+homologous genes into discrete sets:
 
 ```{r eval=FALSE}
 hg <- homolog_groups(results)
-# One row per gene that appears in at least one anchor pair
 head(hg)
-#>   homolog_group group_size              gene genome  list coordinate
-#> 1             1          3       AT1G01010.1    ath  Chr1          1
-#> 2             1          3       AT3G01100.1    ath  Chr3        152
-#> 3             1          3 GSVIVT01000042001    vvi  chr5         88
-#>   remapped_coordinate orientation
-#> 1                   1           +
-#> 2                 150           +
-#> 3                  87           +
+#>   homolog_group group_size              gene genome  list coordinate ...
+#> 1             1          3       AT1G01010.1    ath  Chr1          1 ...
 
-# Size distribution of homolog groups
-table(hg$group_size)
-#>    2    3    4    5    6
-#> 2140  612  184   56   12
-
-# Largest groups
-head(hg[order(-hg$group_size, hg$homolog_group), ])
-
-# Export for downstream use (e.g. OrthoFinder comparison)
+table(hg$group_size)        # size distribution
 write.csv(hg, "homolog_groups.csv", row.names = FALSE)
 ```
 
-> **Note:** Groups correspond to i-ADHoRe anchor pairs, not gene families.  A
-> gene may be in a family (from MCL) but not in a homolog group if it has no
-> syntenic partner.
+> Groups correspond to i-ADHoRe anchor pairs, not MCL families: a gene may be in
+> a family but not in a homolog group if it has no syntenic partner.
+
+### Putative ancestral regions — `find_pars()`
+
+`find_pars()` clusters syntenic segments that share the same partner regions —
+likely duplicated copies of one ancestral locus — following Jaillon *et al.*
+(2009). It works directly on the i-ADHoRe output (no extra input needed) and
+takes either a path or the `read_iadhore_output()` list.
+
+```{r eval=FALSE}
+pars <- find_pars(results, genome_x = "ath", genome_y = "vvi",
+                  p_cutoff = 1e-10, r_cutoff = 0.3)
+#> Found 31 PARs covering 88 significant segment pairs
+
+pars$n_pars
+head(pars$pairs)        # par_id, segment IDs and coordinate ranges, score
+```
+
+For an intra-genomic analysis, omit `genome_y` (it defaults to `genome_x`).
 
 ---
 
-### Step 10 — Visualisations
+## Stage 6 — Visualisation
 
-All three plot functions accept either a path string or the list returned by
-`read_iadhore_output()`.
+All plot functions accept either a path string or the `read_iadhore_output()`
+list. Save several to one PDF by wrapping the calls in `pdf(...)` / `dev.off()`.
 
-#### Whole-genome dot plot
+### Whole-genome dot plot — `plot_dotplot()`
 
-`plot_dotplot()` places all chromosomes along each axis and draws one point per
-anchor pair.  Points are coloured by multiplicon level (light → dark blue =
-low → high level) by default.
+One point per anchor pair, all chromosomes along each axis.
 
 ```{r eval=FALSE}
-# Inter-genomic: ath (x) vs vvi (y)
-plot_dotplot(results,
-             genome_x  = "ath",
-             genome_y  = "vvi",
-             chr_order = "natural")   # chr1 < chr2 < … < chr19
+# inter-genomic: ath (x) vs vvi (y)
+plot_dotplot(results, genome_x = "ath", genome_y = "vvi", chr_order = "natural")
 
-# Intra-genomic: vvi self-dot-plot (automatically mirrored across diagonal)
-plot_dotplot(results,
-             genome_x  = "vvi",
-             genome_y  = "vvi",
-             chr_order = "natural")
+# intra-genomic self dot plot (mirrored across the diagonal)
+plot_dotplot(results, genome_x = "vvi", genome_y = "vvi",
+             colour_by = "multiplicon", point_size = 0.4)
+
+# overlay the PARs found above
+plot_dotplot(results, genome_x = "ath", genome_y = "vvi",
+             chr_order = "natural", highlight_pars = pars)
 ```
-
-Key parameters:
 
 | Parameter | Default | Effect |
 |-----------|---------|--------|
-| `chr_order` | `"size"` | `"natural"` sorts chr1 < chr2 < chr10; `"alpha"` alphabetically; `"size"` largest first |
-| `real_only` | `TRUE` | Set to `FALSE` to also show non-real anchor points |
-| `colour_by` | `"level"` | `"multiplicon"` or `"basecluster"` for discrete colours per block |
-| `point_size` | `0.8` | Reduce (e.g. `0.3`) for dense whole-genome plots |
+| `chr_order` | `"size"` | `"natural"` (chr1<chr2<chr10), `"alpha"`, or `"size"` (largest first) |
+| `real_only` | `TRUE` | `FALSE` also shows non-real anchor points |
+| `colour_by` | `"level"` | `"multiplicon"` or `"basecluster"` for discrete colours |
+| `point_size` | `0.8` | reduce (e.g. `0.3`) for dense whole-genome plots |
 
-```{r eval=FALSE}
-# Colour by multiplicon; smaller dots for a dense plot
-plot_dotplot(results, genome_x = "vvi", genome_y = "vvi",
-             colour_by = "multiplicon", point_size = 0.4)
-```
+### Genome overview — `plot_genome_overview()`
 
-#### Genome overview
-
-`plot_genome_overview()` shows each chromosome as a horizontal baseline with
-non-redundant multiplicon segments stacked above it.  Colour encodes level:
-light grey = level 2, dark grey = levels 3–4, distinct colours ≥ level 5.
-Segments are stacked with level 2 at the bottom so higher-level duplications
-paint on top.
+Each chromosome as a baseline with non-redundant multiplicon segments stacked
+above it; colour encodes level.
 
 ```{r eval=FALSE}
 plot_genome_overview(results, genome = "ath", chr_order = "natural")
 plot_genome_overview(results, genome = "vvi", chr_order = "natural")
 ```
 
-| Parameter | Default | Effect |
-|-----------|---------|--------|
-| `chr_order` | `"natural"` | Same options as `plot_dotplot()` |
-| `seg_height` | `0.3` | Height of each stacked rectangle |
-| `band_gap` | `1.5` | Vertical spacing between chromosomes |
+### Single multiplicon — `plot_multiplicon()`
 
-#### Multiplicon track diagram
-
-`plot_multiplicon()` draws one horizontal gene track per segment of a single
-multiplicon.  Genes are shown as directional arrows (→ forward, ← reverse).
-Anchor pairs are connected by coloured bands; genes sharing the same homolog
-group (transitively, across all ancestor multiplicons) share a colour.
-Non-anchor genes are grey.
+One gene track per segment of a multiplicon; genes as directional arrows, anchor
+pairs joined by coloured bands (shared colour = same homolog group).
 
 ```{r eval=FALSE}
-# Draw the first non-redundant multiplicon
 first_mult <- results$multiplicons$id[results$multiplicons$is_redundant == 0][1]
 plot_multiplicon(results, multiplicon_id = first_mult)
 
-# Show gene IDs below each arrow (useful for small multiplicons)
+# label genes (best for small multiplicons / wide devices)
 plot_multiplicon(results, multiplicon_id = first_mult,
-                 show_gene_ids = TRUE,
-                 gene_id_cex   = 0.35)
+                 show_gene_ids = TRUE, gene_id_cex = 0.35)
 ```
 
-For large multiplicons with many genes, widen the output device before plotting:
+### PAR plots — `plot_par_overview()` and `plot_par()`
+
+`plot_par_overview()` shows the segment-pair score matrix with the PAR clustering
+dendrogram; `plot_par()` draws individual PARs on a dot-plot background.
 
 ```{r eval=FALSE}
-pdf("multiplicon_detail.pdf", width = 20, height = 5)
-plot_multiplicon(results, multiplicon_id = first_mult, show_gene_ids = TRUE)
-dev.off()
+plot_par_overview(pars, output_dir = file.path(work, "iadhore_output"))
+
+plot_par(file.path(work, "iadhore_output"), pars)            # all PARs
+plot_par(file.path(work, "iadhore_output"), pars, par_ids = 1:3)  # selected
 ```
 
-Key parameters:
+---
 
-| Parameter | Default | Effect |
-|-----------|---------|--------|
-| `real_only` | `TRUE` | Whether to restrict bands/colours to real anchor points |
-| `band_alpha` | `0.35` | Transparency of connecting bands (0 = invisible, 1 = opaque) |
-| `show_gene_ids` | `FALSE` | Print gene IDs rotated below each arrow |
-| `gene_id_cex` | `0.4` | Text size for gene ID labels |
+## Exporting to MCScanX
 
-#### Saving plots to PDF
+If you want to view the synteny in [MCScanX](https://github.com/wyp1125/MCScanX)
+or its downstream tools, convert the i-ADHoRe output to MCScanX's two input
+formats:
 
 ```{r eval=FALSE}
-pdf("iadhore_plots.pdf", width = 10, height = 8)
+# .collinearity file (synteny blocks), optionally with e-values from BLAST
+write_mcscanx_collinearity(
+  output_dir = file.path(work, "iadhore_output"),
+  file       = file.path(work, "ath_vvi.collinearity"),
+  blast_file = file.path(work, "all_vs_all.blast")  # optional
+)
 
-plot_dotplot(results, genome_x = "ath", genome_y = "vvi", chr_order = "natural")
-plot_dotplot(results, genome_x = "ath", genome_y = "ath", chr_order = "natural")
-plot_genome_overview(results, genome = "ath")
-plot_genome_overview(results, genome = "vvi")
-plot_multiplicon(results, multiplicon_id = first_mult)
-
-dev.off()
+# .gff file (gene positions in MCScanX's chr/gene/start/end format)
+write_mcscanx_gff(
+  output_dir = file.path(work, "iadhore_output"),
+  file       = file.path(work, "ath_vvi.gff")
+)
 ```
 
 ---
 
 ## Single-species analysis (intra-genomic duplications)
 
-The workflow is identical — just provide one species and one FASTA:
+The workflow is identical — provide one genome and its FASTA. This detects
+ancient whole-genome-duplication blocks within the species.
 
 ```{r eval=FALSE}
-ath_lists <- parse_gff(ath_gff,
-  output_dir   = "ath_lists",
-  genome_name  = "ath",
-  feature_type = "mRNA",
-  id_attribute = "ID",
-  chromosomes  = c("Chr1", "Chr2", "Chr3", "Chr4", "Chr5"))
+ath_lists <- parse_gff(ath_gff, output_dir = "ath_lists", genome_name = "ath",
+                       feature_type = "mRNA", id_attribute = "ID",
+                       chromosomes = paste0("Chr", 1:5))
 
 run_diamond(ath_fasta, output_file = "ath.blast", threads = 8)
+blast_to_families("ath.blast", output_file = "ath_families.txt",
+                  gene_list_files = unname(ath_lists))
 
-blast_to_families("ath.blast",
-  output_file     = "ath_families.txt",
-  gene_list_files = unname(ath_lists))
-
-write_iadhore_config(
-  genomes     = list(ath = ath_lists),
-  blast_table = "ath_families.txt",
-  table_type  = "family",
-  output_path = "ath_output",
-  file        = "ath_config.ini")
-
+write_iadhore_config(genomes = list(ath = ath_lists),
+                     blast_table = "ath_families.txt", table_type = "family",
+                     output_path = "ath_output", file = "ath_config.ini")
 run_iadhore("ath_config.ini")
+
 results <- read_iadhore_output("ath_output")
-
-# Statistics and plots work identically for single-species runs
 iadhore_summary(results)
-hg <- homolog_groups(results)
+pars <- find_pars(results, genome_x = "ath")    # intra-genomic PARs
 
-plot_dotplot(results, chr_order = "natural")          # intra-genomic dot plot
+plot_dotplot(results, genome_x = "ath", genome_y = "ath", chr_order = "natural")
 plot_genome_overview(results, genome = "ath")
+plot_par(results, pars)
 ```
 
 ---
 
-## Working with your own data
+## Function reference
 
-### If you only have a BLAST/DIAMOND table (no MCL)
+| Stage | Functions |
+|-------|-----------|
+| Setup | `check_tools()`, `setup_instructions()` |
+| Input prep | `inspect_gff()`, `recommend_parse_gff()`, `parse_gff()`, `write_gene_list()` |
+| Homology | `run_diamond()`, `parse_blast()`, `blast_to_families()` |
+| Configure / run | `write_iadhore_config()`, `run_iadhore()` |
+| Read output | `read_iadhore_output()`, `read_multiplicons()`, `read_baseclusters()`, `read_anchorpoints()`, `read_segments()`, `read_genes()`, `read_list_elements()`, `read_clouds()`, `read_cloud_anchorpoints()` |
+| Statistics | `iadhore_summary()`, `colinear_portions()`, `multiplicated_portions()`, `homolog_groups()`, `find_pars()` |
+| Plots | `plot_dotplot()`, `plot_genome_overview()`, `plot_multiplicon()`, `plot_par_overview()`, `plot_par()` |
+| Export | `write_mcscanx_collinearity()`, `write_mcscanx_gff()` |
 
-Use `parse_blast()` to filter the results and produce a gene-pair table for
-i-ADHoRe's `table_type=pairs` mode:
-
-```{r eval=FALSE}
-parse_blast("mydata.blast",
-  output_file   = "blast_pairs.txt",
-  evalue_cutoff = 1e-5,
-  min_pident    = 30)
-
-write_iadhore_config(
-  ...,
-  blast_table = "blast_pairs.txt",
-  table_type  = "pairs")
-```
-
-### Exploring a new GFF file
-
-```{r eval=FALSE}
-inspect_gff("my_annotation.gff3")
-# Shows all feature types, attribute keys, and example IDs
-
-recommend_parse_gff("my_annotation.gff3", "my_proteome.fasta")
-# Automatically finds the best feature_type + id_attribute combination
-```
-
-### Writing gene lists manually
-
-If your gene coordinates are already in R (e.g. from a database query), use
-`write_gene_list()` directly:
-
-```{r eval=FALSE}
-write_gene_list(
-  gene_ids = c("gene001", "gene002", "gene003"),
-  strand   = c("+", "-", "+"),
-  file     = "chr1.lst"
-)
-```
+Every function has a full help page — e.g. `?parse_gff` — listing all arguments
+and return values.
 
 ---
 
