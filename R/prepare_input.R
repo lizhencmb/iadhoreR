@@ -61,26 +61,78 @@ read_fasta_ids <- function(fasta_file) {
 
 
 #' Extract a named attribute from GFF attribute strings
+#'
+#' Returns a vector the same length as `attributes`, with NA for rows that do
+#' not carry the requested key. The key must match a whole attribute name (so
+#' asking for "ID" does not accidentally match "protein_id").
 #' @keywords internal
 extract_gff_attribute <- function(attributes, key, is_gtf) {
   if (is_gtf) {
-    pattern <- paste0(key, '\\s+"([^"]+)"')
+    pattern <- paste0("(?:^|;|\\s)", key, '\\s+"([^"]+)"')
   } else {
     pattern <- paste0("(?:^|;)", key, "=([^;]+)")
   }
-  # ifelse keeps NA for non-matching rows
   m <- regexpr(pattern, attributes, perl = TRUE)
-  vals <- ifelse(m > 0,
-                 regmatches(attributes, m, invert = FALSE),
-                 NA_character_)
-  # strip the key prefix/suffix to leave just the value
-  if (is_gtf) {
-    vals <- sub(paste0("^", key, '\\s+"'), "", vals)
-    vals <- sub('"$', "", vals)
-  } else {
-    vals <- sub(paste0("^;?", key, "="), "", vals)
+  vals <- rep(NA_character_, length(attributes))
+  hit  <- m > 0
+  if (any(hit)) {
+    matched <- regmatches(attributes, m)
+    # strip the key prefix/suffix to leave just the value
+    if (is_gtf) {
+      matched <- sub(paste0('^(?:[;\\s]*)', key, '\\s+"'), "", matched, perl = TRUE)
+      matched <- sub('"$', "", matched)
+    } else {
+      matched <- sub(paste0("^;?", key, "="), "", matched)
+    }
+    vals[hit] <- matched
   }
   vals
+}
+
+
+#' Discover all attribute keys present in a vector of GFF attribute strings
+#' @keywords internal
+discover_gff_keys <- function(attributes, is_gtf) {
+  if (is_gtf) {
+    pat <- '[A-Za-z_][A-Za-z0-9_]*(?=\\s+")'
+  } else {
+    pat <- '[A-Za-z_][A-Za-z0-9_]*(?==)'
+  }
+  unique(unlist(regmatches(attributes, gregexpr(pat, attributes, perl = TRUE))))
+}
+
+
+#' Find which GFF attribute matches a non-primary field of the FASTA headers
+#'
+#' Used as a fallback when no GFF attribute equals the primary FASTA IDs. Splits
+#' each FASTA header into all whitespace tokens and `|`/`:`/`,`-delimited
+#' subfields, then reports the (feature_type, attribute) whose values best
+#' overlap that expanded set. Returns NULL when nothing overlaps.
+#' @keywords internal
+diagnose_fasta_mismatch <- function(gff, is_gtf, attr_keys, feat_types,
+                                    fasta_file) {
+  lines   <- readLines(fasta_file)
+  headers <- sub("^>", "", lines[startsWith(lines, ">")])
+  tokens  <- unlist(strsplit(headers, "[ \t]+"))
+  subflds <- unlist(strsplit(tokens, "[|:,]"))
+  token_set <- unique(c(tokens, subflds))
+  token_set <- token_set[nzchar(token_set)]
+
+  best <- NULL
+  for (ft in feat_types) {
+    sub_gff <- gff$attributes[gff$type == ft]
+    if (length(sub_gff) == 0) next
+    for (ak in attr_keys) {
+      ids <- extract_gff_attribute(sub_gff, ak, is_gtf)
+      uid <- unique(ids[!is.na(ids)])
+      if (length(uid) == 0) next
+      n   <- length(intersect(uid, token_set))
+      if (n > 0 && (is.null(best) || n > best$n)) {
+        best <- list(feature_type = ft, id_attribute = ak, n = n)
+      }
+    }
+  }
+  best
 }
 
 
@@ -137,13 +189,16 @@ recommend_parse_gff <- function(gff_file, fasta_file) {
   is_gtf <- grepl('"', gff$attributes[1])
   cat("GFF format: ", if (is_gtf) "GTF" else "GFF3", "\n\n", sep = "")
 
-  # candidate feature types (by frequency) and attribute keys
+  # candidate feature types (by frequency) and attribute keys. Discover every
+  # key actually present in the file rather than assuming a fixed set: the ID
+  # that matches the FASTA can live in non-standard keys such as protein_id,
+  # Source_ID, proteinId or transcriptId depending on the annotation source.
   feat_types  <- names(sort(table(gff$type), decreasing = TRUE))
-  if (is_gtf) {
-    attr_keys <- c("transcript_id", "gene_id", "ID", "Name")
-  } else {
-    attr_keys <- c("ID", "Name", "transcript_id", "gene_id", "Parent")
-  }
+  preferred   <- c("ID", "Name", "transcript_id", "gene_id", "protein_id",
+                   "Source_ID", "proteinId", "transcriptId", "Parent")
+  discovered  <- discover_gff_keys(gff$attributes, is_gtf)
+  attr_keys   <- unique(c(intersect(preferred, discovered),
+                          setdiff(discovered, preferred)))
 
   # score every combination by UNIQUE matched IDs
   # prefer: (1) most unique matches, (2) fewest duplicates per unique ID
@@ -175,7 +230,34 @@ recommend_parse_gff <- function(gff_file, fasta_file) {
   }
   results <- results[seq_len(idx)]
 
-  if (length(results) == 0) stop("No usable attribute found in GFF.")
+  # decide whether the primary IDs were found in any attribute at all
+  best_n <- if (length(results) == 0) 0L else max(sapply(results, `[[`, "n_matched"))
+
+  if (best_n < 0.5 * n_fasta) {
+    # The FASTA primary IDs are not (mostly) stored as a GFF attribute value.
+    # Look for where they hide so the message is actionable instead of cryptic.
+    diag <- diagnose_fasta_mismatch(gff, is_gtf, attr_keys, feat_types, fasta_file)
+    msg <- paste0(
+      "The primary FASTA IDs do not match any GFF attribute value",
+      if (best_n > 0) paste0(" well (best: ", best_n, "/", n_fasta, ").") else ".",
+      "\n  FASTA ID example : ", paste(head(fasta_ids, 2), collapse = ", "))
+    if (!is.null(diag)) {
+      msg <- paste0(msg,
+        "\n  However GFF attribute '", diag$id_attribute, "' (feature '",
+        diag$feature_type, "') matches ", diag$n, " of the FASTA header",
+        " sub-fields.\n  Your FASTA primary IDs differ from the IDs stored in",
+        " the GFF, so gene lists built from this GFF will NOT match a BLAST",
+        " table built from this FASTA.\n  Reconcile the IDs first (rename the",
+        " FASTA headers, or rebuild the BLAST table using the same IDs as the",
+        " GFF), then re-run.")
+    } else {
+      msg <- paste0(msg,
+        "\n  No GFF attribute matched any FASTA header field. Check that the",
+        " GFF and FASTA correspond to the same annotation, and run",
+        " inspect_gff() to see the available attribute keys.")
+    }
+    stop(msg, call. = FALSE)
+  }
 
   # pick best: most unique matches; break ties by lowest duplication ratio
   n_matched_vec <- sapply(results, `[[`, "n_matched")
@@ -396,23 +478,21 @@ parse_gff <- function(gff_file, output_dir, genome_name = "genome",
   sample_attr <- gff$attributes[1]
   is_gtf <- grepl('"', sample_attr)
 
-  if (is_gtf) {
-    pattern <- paste0(id_attribute, '\\s+"([^"]+)"')
-    gff$gene_id <- regmatches(gff$attributes,
-                               regexpr(pattern, gff$attributes))
-    gff$gene_id <- sub(paste0(id_attribute, '\\s+"'), "", gff$gene_id)
-    gff$gene_id <- sub('"$', "", gff$gene_id)
-  } else {
-    pattern <- paste0("(?:^|;)", id_attribute, "=([^;]+)")
-    m <- regexpr(pattern, gff$attributes, perl = TRUE)
-    gff$gene_id <- regmatches(gff$attributes, m)
-    gff$gene_id <- sub(paste0("^;?", id_attribute, "="), "", gff$gene_id)
-  }
+  gff$gene_id <- extract_gff_attribute(gff$attributes, id_attribute, is_gtf)
 
   missing_id <- is.na(gff$gene_id) | gff$gene_id == ""
   if (any(missing_id)) {
     stop(sum(missing_id), " features have no '", id_attribute, "' attribute.",
          "\nRun inspect_gff() to see available attribute keys.")
+  }
+
+  # i-ADHoRe gene lists require a known orientation; drop features whose strand
+  # is unknown (".") rather than aborting the whole file.
+  bad_strand <- !(gff$strand %in% c("+", "-"))
+  if (any(bad_strand)) {
+    warning(sum(bad_strand), " feature(s) have no strand ('.') and were ",
+            "excluded.", call. = FALSE)
+    gff <- gff[!bad_strand, ]
   }
 
   if (!is.null(chromosomes)) {
@@ -426,6 +506,9 @@ parse_gff <- function(gff_file, output_dir, genome_name = "genome",
   chr_list  <- split(gff, gff$seqid)
   file_paths <- vapply(names(chr_list), function(chr) {
     chr_genes <- chr_list[[chr]][order(chr_list[[chr]]$start), ]
+    # multi-segment feature types (e.g. CDS/exon) repeat the same gene id on
+    # consecutive rows; keep one entry per gene at its first (lowest) position.
+    chr_genes <- chr_genes[!duplicated(chr_genes$gene_id), ]
     out_file  <- file.path(output_dir, paste0(genome_name, "_", chr, ".lst"))
     write_gene_list(chr_genes$gene_id, chr_genes$strand, out_file)
     out_file

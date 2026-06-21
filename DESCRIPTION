@@ -25,6 +25,8 @@ Imports:
     grDevices
 Suggests:
     knitr,
-    rmarkdown
+    rmarkdown,
+    testthat (>= 3.0.0)
 VignetteBuilder: knitr
+Config/testthat/edition: 3
 RoxygenNote: 7.3.2
